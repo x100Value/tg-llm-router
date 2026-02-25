@@ -5,6 +5,7 @@ const helmet = require('helmet');
 const path = require('path');
 const logger = require('./middleware/logger');
 const rateLimiter = require('./middleware/rateLimiter');
+const antiSpam = require('./middleware/antiSpam');
 const validateTelegram = require('./middleware/validateTelegram');
 const llmRouter = require('./router/llmRouter');
 const userService = require('./services/userService');
@@ -31,7 +32,7 @@ app.get('/api/models', async (req, res) => {
 });
 
 // Regular chat
-app.post('/api/chat', validateTelegram, rateLimiter, async (req, res) => {
+app.post('/api/chat', validateTelegram, rateLimiter, antiSpam, async (req, res) => {
   try {
     const { userId, model, message } = req.body;
     if (!userId || !message) return res.status(400).json({ error: 'userId and message required' });
@@ -47,7 +48,7 @@ app.post('/api/chat', validateTelegram, rateLimiter, async (req, res) => {
 });
 
 // SSE streaming chat
-app.post('/api/chat/stream', validateTelegram, rateLimiter, async (req, res) => {
+app.post('/api/chat/stream', validateTelegram, rateLimiter, antiSpam, async (req, res) => {
   try {
     const { userId, model, message } = req.body;
     if (!userId || !message) return res.status(400).json({ error: 'userId and message required' });
@@ -111,7 +112,7 @@ app.delete('/api/session/:telegramId', async (req, res) => {
 const tonRoutes = require('./routes/ton');
 const vaultRoutes = require('./routes/vault');
 app.use(tonRoutes);
-app.use(vaultRoutes);
+app.use(rateLimiter, vaultRoutes);
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (req, res) => { if (!req.path.startsWith('/api')) res.sendFile(path.join(__dirname, 'public', 'index.html')); });
 

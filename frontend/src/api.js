@@ -53,3 +53,6 @@ export async function vaultDelete(telegramId, category) {
 }
 
 api.vault = { save: vaultSave, load: vaultLoad, list: vaultList, delete: vaultDelete };
+
+export async function health() { const r = await fetch(`${BASE}/health`, { headers:authHeaders(false) }); return r.json(); }
+api.health = health;

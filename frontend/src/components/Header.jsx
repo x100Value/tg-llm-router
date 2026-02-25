@@ -1,5 +1,4 @@
 import React from 'react';
-import { TonConnectButton, useTonAddress } from '@tonconnect/ui-react';
 
 const ROLE_META = {
   agent: { label: 'AI Agents', color: 'from-purple-500 to-indigo-600', labelRu: 'ИИ Агенты' },
@@ -10,8 +9,6 @@ const ROLE_META = {
 export default function Header({ role, lang, onLangToggle, onRoleChange, t }) {
   const meta = ROLE_META[role];
   const isRu = lang?.startsWith('ru');
-  const address = useTonAddress();
-
   return (
     <header className="sticky top-0 z-50 glass border-b border-white/5">
       <div className="flex items-center justify-between px-4 py-2.5">
@@ -28,7 +25,6 @@ export default function Header({ role, lang, onLangToggle, onRoleChange, t }) {
           </div>
         </div>
         <div className="flex items-center gap-1.5">
-          <TonConnectButton className="ton-btn" />
           <button onClick={onLangToggle} className="px-2 py-1 text-[10px] font-mono font-medium rounded-md bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/60 transition-all">
             {isRu ? 'EN' : 'RU'}
           </button>
