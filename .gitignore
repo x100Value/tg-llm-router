@@ -1,3 +1,8 @@
-.env
 node_modules/
+.env
 *.log
+dist/
+backend/public/
+*.tar.gz
+*.bak
+package-lock.json
