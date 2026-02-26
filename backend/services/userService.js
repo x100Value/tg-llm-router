@@ -11,6 +11,17 @@ class UserService {
   async init() {
     try {
       await pool.query('SELECT 1');
+      await pool.query(`CREATE TABLE IF NOT EXISTS request_dedup (
+        telegram_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        endpoint TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'processing',
+        response JSONB,
+        error TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY(telegram_id, request_id, endpoint)
+      )`);
       console.log('[DB] PostgreSQL connected');
     } catch (e) {
       console.error('[DB] PostgreSQL failed, using memory fallback:', e.message);
@@ -38,6 +49,76 @@ class UserService {
     } catch {
       return '[encrypted message unavailable]';
     }
+  }
+
+  _normalizeRequestId(requestId) {
+    const value = String(requestId || '').trim();
+    if (!value) return '';
+    return value.slice(0, 128);
+  }
+
+  async beginIdempotentRequest(telegramId, requestId, endpoint) {
+    const rid = this._normalizeRequestId(requestId);
+    if (this.fallback || !rid) return { action: 'proceed' };
+
+    const inserted = await pool.query(
+      `INSERT INTO request_dedup(telegram_id, request_id, endpoint, status, updated_at)
+       VALUES($1,$2,$3,'processing',NOW())
+       ON CONFLICT DO NOTHING
+       RETURNING status`,
+      [telegramId, rid, endpoint]
+    );
+
+    if (inserted.rowCount > 0) return { action: 'proceed' };
+
+    const existing = await pool.query(
+      'SELECT status, response FROM request_dedup WHERE telegram_id=$1 AND request_id=$2 AND endpoint=$3',
+      [telegramId, rid, endpoint]
+    );
+
+    const row = existing.rows[0];
+    if (!row) return { action: 'proceed' };
+
+    if (row.status === 'completed' && row.response) {
+      return { action: 'replay', response: row.response };
+    }
+
+    if (row.status === 'processing') {
+      return { action: 'in_progress' };
+    }
+
+    await pool.query(
+      `UPDATE request_dedup
+       SET status='processing', response=NULL, error=NULL, updated_at=NOW()
+       WHERE telegram_id=$1 AND request_id=$2 AND endpoint=$3`,
+      [telegramId, rid, endpoint]
+    );
+
+    return { action: 'proceed' };
+  }
+
+  async completeIdempotentRequest(telegramId, requestId, endpoint, responsePayload) {
+    const rid = this._normalizeRequestId(requestId);
+    if (this.fallback || !rid) return;
+
+    await pool.query(
+      `UPDATE request_dedup
+       SET status='completed', response=$4::jsonb, error=NULL, updated_at=NOW()
+       WHERE telegram_id=$1 AND request_id=$2 AND endpoint=$3`,
+      [telegramId, rid, endpoint, JSON.stringify(responsePayload || {})]
+    );
+  }
+
+  async failIdempotentRequest(telegramId, requestId, endpoint, errorText) {
+    const rid = this._normalizeRequestId(requestId);
+    if (this.fallback || !rid) return;
+
+    await pool.query(
+      `UPDATE request_dedup
+       SET status='failed', error=$4, updated_at=NOW()
+       WHERE telegram_id=$1 AND request_id=$2 AND endpoint=$3`,
+      [telegramId, rid, endpoint, String(errorText || '').slice(0, 400)]
+    );
   }
 
   async getOrCreate(telegramId, lang = 'en') {

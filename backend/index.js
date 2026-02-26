@@ -32,6 +32,12 @@ app.use(statsRoutes);
 app.use(personasRoutes);
 app.use(modesRoutes);
 
+function getIdempotencyKey(req) {
+  const fromHeader = req.headers['x-idempotency-key'];
+  const fromBody = req.body?.requestId;
+  return String(fromHeader || fromBody || '').trim().slice(0, 128);
+}
+
 function mapClientFacingError(err) {
   const raw = String(err?.message || 'Internal error');
 
@@ -106,6 +112,7 @@ app.get('/api/models', async (req, res) => {
 
 app.post('/api/chat', validateTelegram, requireTelegramUserMatch, rateLimiter, antiSpam, globalBudgetGuard, tokenCap, promptShield, async (req, res) => {
   const { userId, model, message } = req.body;
+  const requestId = getIdempotencyKey(req);
   const isPrivate = req.body.private === true;
   let reservation = null;
 
@@ -113,6 +120,15 @@ app.post('/api/chat', validateTelegram, requireTelegramUserMatch, rateLimiter, a
     if (!userId || !message) return res.status(400).json({ error: 'userId and message required' });
 
     await userService.getOrCreate(userId);
+
+    const idem = await userService.beginIdempotentRequest(userId, requestId, 'chat');
+    if (idem.action === 'replay' && idem.response) {
+      return res.json(idem.response);
+    }
+    if (idem.action === 'in_progress') {
+      return res.status(409).json({ error: 'Request already in progress', code: 'REQUEST_IN_PROGRESS' });
+    }
+
     reservation = await reserveQuotaOrReject(userId, res);
     if (!reservation) return;
 
@@ -134,9 +150,19 @@ app.post('/api/chat', validateTelegram, requireTelegramUserMatch, rateLimiter, a
       fallback: !!result.fallback,
     });
 
-    res.json({ response: result.content, model: result.model, provider: result.provider, fallback: result.fallback });
+    const payload = {
+      response: result.content,
+      model: result.model,
+      provider: result.provider,
+      fallback: result.fallback,
+    };
+
+    await userService.completeIdempotentRequest(userId, requestId, 'chat', payload);
+    res.json(payload);
   } catch (err) {
     if (reservation) await rollbackQuotaSafe(userId, reservation, 'Chat');
+    await userService.failIdempotentRequest(userId, requestId, 'chat', err.message);
+
     console.error('[Chat]', err.message);
     const mapped = mapClientFacingError(err);
     res.status(mapped.status).json({ error: mapped.message, code: mapped.code });
@@ -145,6 +171,7 @@ app.post('/api/chat', validateTelegram, requireTelegramUserMatch, rateLimiter, a
 
 app.post('/api/chat/stream', validateTelegram, requireTelegramUserMatch, rateLimiter, antiSpam, globalBudgetGuard, tokenCap, promptShield, async (req, res) => {
   const { userId, model, message } = req.body;
+  const requestId = getIdempotencyKey(req);
   const isPrivate = req.body.private === true;
   let reservation = null;
 
@@ -152,6 +179,25 @@ app.post('/api/chat/stream', validateTelegram, requireTelegramUserMatch, rateLim
     if (!userId || !message) return res.status(400).json({ error: 'userId and message required' });
 
     await userService.getOrCreate(userId);
+
+    const idem = await userService.beginIdempotentRequest(userId, requestId, 'stream');
+    if (idem.action === 'replay' && idem.response) {
+      const cached = idem.response;
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      });
+      if (cached.response) {
+        res.write(`data: ${JSON.stringify({ chunk: cached.response })}\n\n`);
+      }
+      res.write(`data: ${JSON.stringify({ done: true, replay: true })}\n\n`);
+      return res.end();
+    }
+    if (idem.action === 'in_progress') {
+      return res.status(409).json({ error: 'Request already in progress', code: 'REQUEST_IN_PROGRESS' });
+    }
+
     reservation = await reserveQuotaOrReject(userId, res);
     if (!reservation) return;
 
@@ -184,10 +230,21 @@ app.post('/api/chat/stream', validateTelegram, requireTelegramUserMatch, rateLim
       fallback: false,
     });
 
+    const payload = {
+      response: full,
+      model: model || null,
+      provider: 'stream',
+      fallback: false,
+    };
+
+    await userService.completeIdempotentRequest(userId, requestId, 'stream', payload);
+
     res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
     res.end();
   } catch (err) {
     if (reservation) await rollbackQuotaSafe(userId, reservation, 'Stream');
+    await userService.failIdempotentRequest(userId, requestId, 'stream', err.message);
+
     console.error('[Stream]', err.message);
 
     const mapped = mapClientFacingError(err);
