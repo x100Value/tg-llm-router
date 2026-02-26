@@ -7,8 +7,10 @@ const logger = require('./middleware/logger');
 const rateLimiter = require('./middleware/rateLimiter');
 const antiSpam = require('./middleware/antiSpam');
 const freeLimit = require("./middleware/freeLimit");
+const tokenCap = require("./middleware/tokenCap");
 const statsRoutes = require("./routes/stats");
 const personasRoutes = require("./routes/personas");
+const modesRoutes = require("./routes/modes");
 const validateTelegram = require('./middleware/validateTelegram');
 const llmRouter = require('./router/llmRouter');
 const userService = require('./services/userService');
@@ -22,6 +24,7 @@ app.use(express.json());
 app.use(logger);
 app.use(statsRoutes);
 app.use(personasRoutes);
+app.use(modesRoutes);
 
 app.get('/api/health', async (req, res) => {
   res.json({ status: 'ok', ...(await userService.stats()), uptime: process.uptime() });
@@ -37,12 +40,12 @@ app.get('/api/models', async (req, res) => {
 });
 
 // Regular chat
-app.post('/api/chat', validateTelegram, rateLimiter, antiSpam, freeLimit, async (req, res) => {
+app.post('/api/chat', validateTelegram, rateLimiter, antiSpam, tokenCap, freeLimit, async (req, res) => {
   try {
     const { userId, model, message } = req.body;
     if (!userId || !message) return res.status(400).json({ error: 'userId and message required' });
     await userService.getOrCreate(userId);
-    await userService.addMessage(userId, 'user', message);
+    if (req.body.private !== true) await userService.addMessage(userId, "user", message);
     const session = await userService.getSession(userId);
     const messages = session.slice(-10).map(m => ({ role: m.role, content: m.content }));
     const byok = await userService.getByokKeys(userId);
@@ -53,12 +56,12 @@ app.post('/api/chat', validateTelegram, rateLimiter, antiSpam, freeLimit, async 
 });
 
 // SSE streaming chat
-app.post('/api/chat/stream', validateTelegram, rateLimiter, antiSpam, freeLimit, async (req, res) => {
+app.post('/api/chat/stream', validateTelegram, rateLimiter, antiSpam, tokenCap, freeLimit, async (req, res) => {
   try {
     const { userId, model, message } = req.body;
     if (!userId || !message) return res.status(400).json({ error: 'userId and message required' });
     await userService.getOrCreate(userId);
-    await userService.addMessage(userId, 'user', message);
+    if (req.body.private !== true) await userService.addMessage(userId, "user", message);
     const session = await userService.getSession(userId);
     const messages = session.slice(-10).map(m => ({ role: m.role, content: m.content }));
     const byok = await userService.getByokKeys(userId);

@@ -1,96 +1,108 @@
-# 🚀 TG-LLM Router — Telegram Mini App MVP
+# ⚡ TG-LLM Router — Telegram Mini App
 
-Telegram Mini App с LLM роутером: чат с AI через OpenRouter и HuggingFace с автоматическим fallback.
+Unified LLM router: chat with AI through OpenRouter (15+ free models) with automatic fallback, BYOK, TON Connect, and 4 user roles.
 
-## Архитектура
+**Live:** https://routertext.ru  
+**Bot:** @Routeragentbot  
 
+## Architecture
 ```
 Frontend (React + Tailwind + Telegram WebApp SDK)
-    ↓ REST API
-Backend (Node.js + Express)
+    ↓ REST API + SSE Streaming
+Backend (Node.js + Express + PostgreSQL)
     ↓
-LLM Router (fallback logic)
+LLM Router (auto-refresh + dynamic fallback)
     ↓
-Providers: OpenRouter | HuggingFace
+Providers: OpenRouter (15+ free) | HuggingFace
 ```
 
-## 3 Панели (ЛК)
+## 4 Roles
 
-| Панель | Описание |
-|--------|----------|
-| 💬 Chat | Чат с LLM, выбор модели, история |
-| 🤖 AI Dashboard | Список моделей, статусы, тест |
-| 👨‍💻 Developer | BYOK ключи, API документация, вебхуки |
+| Role | Description |
+|------|-------------|
+| 💬 **User** | Chat with LLM, personas, modes, private mode |
+| 🏢 **Business** | Team management, budget control, usage dashboard |
+| 🤖 **AI Agents** | Agent builder, orchestrator, prompt marketplace |
+| ⌨️ **Developer** | BYOK keys, API docs, playground, usage metrics |
 
-## Быстрый старт
+## Features
 
-### 1. Backend
+### Chat
+- SSE streaming (real-time text generation)
+- 4 personas (Coder, Translator, Analyst, Writer)
+- 3 modes (⚡ Fast / 🧠 Precise / 💰 Economy)
+- 🔒 Private mode (no history saved)
+- Model selection from 15+ free models
+- Auto language detection (RU/EN)
 
+### Security
+- Telegram initData HMAC-SHA256 validation
+- BYOK keys encrypted (AES)
+- E2E encryption module (AES-GCM-256, PBKDF2)
+- Rate limiting (20 req/min)
+- Anti-spam (parallel request blocking)
+- Token cap (input length limit)
+- Helmet HTTP headers
+- SSL/TLS (Let's Encrypt)
+
+### Monetization
+- 20 free requests/day limit
+- Balance tracking (PostgreSQL)
+- Transaction logging
+- Telegram Stars & TON payments (planned)
+
+### Infrastructure
+- PostgreSQL (users, messages, vault, balances, transactions, visits)
+- Auto-refresh free models every 10 min
+- Dynamic fallback across all available models
+- Docker + docker-compose
+- systemd service
+- nginx reverse proxy + SSL
+
+## Quick Start
+
+### Backend
 ```bash
 cd backend
-cp .env.example .env
-# Заполните API ключи в .env
+cp .env.example .env  # fill in API keys
 npm install
 npm run dev
 ```
 
-### 2. Frontend
-
+### Frontend
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-Frontend: http://localhost:3000 → проксирует API на :3001
-
 ### Docker
-
 ```bash
-cp backend/.env.example backend/.env
-# Заполните ключи
 docker-compose up --build
 ```
 
-Приложение: http://localhost:3001
-
 ## API Endpoints
 
-| Method | Path | Описание |
-|--------|------|----------|
-| GET | /api/health | Статус сервера |
-| GET | /api/models | Список моделей |
-| POST | /api/chat | Отправить сообщение |
-| GET | /api/user/:id | Профиль пользователя |
-| POST | /api/user/:id/byok | Сохранить BYOK ключ |
-| GET | /api/session/:id | История чата |
-| DELETE | /api/session/:id | Очистить чат |
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /api/health | Server status |
+| GET | /api/models | Available models |
+| POST | /api/chat | Send message |
+| POST | /api/chat/stream | SSE streaming |
+| GET | /api/personas | Chat personas |
+| GET | /api/modes | Chat modes |
+| GET | /api/stats | Visit statistics |
+| POST | /api/stats/visit | Track visit |
+| GET | /api/user/:id | User profile |
+| POST | /api/user/:id/byok | Save BYOK key |
+| GET | /api/session/:id | Chat history |
+| DELETE | /api/session/:id | Clear history |
 
-## Фичи MVP
+## Stack
+- **Frontend:** React 18 + Vite + Tailwind CSS + Telegram WebApp SDK + TON Connect
+- **Backend:** Node.js 20 + Express + PostgreSQL + crypto-js
+- **LLM:** OpenRouter (free models, auto-refresh) + HuggingFace
+- **Infra:** Ubuntu 24, nginx, Let's Encrypt, systemd, Docker
 
-- ✅ 3 панели ЛК
-- ✅ Авто-определение языка из Telegram (RU/EN)
-- ✅ OpenRouter + HuggingFace с fallback
-- ✅ BYOK (зашифрованные ключи)
-- ✅ Rate limiting
-- ✅ Логирование запросов
-- ✅ История сессии (in-memory)
-- ✅ Мобильная адаптация (Tailwind)
-- ✅ Docker-ready
-
-## Стек
-
-- **Frontend**: React 18 + Vite + Tailwind CSS + Telegram WebApp SDK
-- **Backend**: Node.js + Express + crypto-js
-- **LLM**: OpenRouter (free models) + HuggingFace Inference
-- **Infra**: Docker + docker-compose
-
-## Для Telegram Bot
-
-1. Создайте бота через @BotFather
-2. Включите Mini App: /newapp → укажите URL вашего deployed frontend
-3. Готово — пользователи открывают Mini App из бота
-
-## Лицензия
-
+## License
 MIT
