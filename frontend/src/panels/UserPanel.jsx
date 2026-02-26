@@ -1,5 +1,14 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { api } from '../api';
+
+function formatPeriodEnd(value) {
+  if (!value) return 'No expiry';
+  try {
+    return new Date(value).toLocaleDateString();
+  } catch {
+    return String(value);
+  }
+}
 
 export default function UserPanel({ t, userId }) {
   const [models, setModels] = useState([]);
@@ -15,6 +24,12 @@ export default function UserPanel({ t, userId }) {
   const [mode, setMode] = useState(null);
   const [showModes, setShowModes] = useState(false);
   const [isPrivate, setIsPrivate] = useState(false);
+  const [plans, setPlans] = useState([]);
+  const [subscription, setSubscription] = useState(null);
+  const [billingLoading, setBillingLoading] = useState(false);
+  const [billingError, setBillingError] = useState('');
+  const [showPaywall, setShowPaywall] = useState(false);
+  const [checkoutPlanCode, setCheckoutPlanCode] = useState('');
   const endRef = useRef(null);
 
   useEffect(() => {
@@ -26,6 +41,47 @@ export default function UserPanel({ t, userId }) {
   }, [userId]);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs, loading]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadBilling = async () => {
+      if (!userId) return;
+      setBillingLoading(true);
+      try {
+        const [billingPlans, billingMe] = await Promise.all([
+          api.billing.plans(),
+          api.billing.me(userId),
+        ]);
+        if (cancelled) return;
+        setPlans(Array.isArray(billingPlans) ? billingPlans : []);
+        setSubscription(billingMe?.subscription || null);
+        setBillingError('');
+      } catch (err) {
+        if (cancelled) return;
+        setBillingError(String(err?.message || 'Billing unavailable'));
+      } finally {
+        if (!cancelled) setBillingLoading(false);
+      }
+    };
+
+    loadBilling();
+    return () => { cancelled = true; };
+  }, [userId]);
+
+  const refreshBilling = async () => {
+    if (!userId) return;
+    const billingMe = await api.billing.me(userId);
+    setSubscription(billingMe?.subscription || null);
+  };
+
+  const activeSubscription = useMemo(() => {
+    if (!subscription) return null;
+    if (!subscription.current_period_end) return subscription;
+    const end = new Date(subscription.current_period_end);
+    if (Number.isNaN(end.getTime())) return null;
+    return end > new Date() ? subscription : null;
+  }, [subscription]);
 
   const send = async () => {
     if (!input.trim() || loading) return;
@@ -44,6 +100,7 @@ export default function UserPanel({ t, userId }) {
       setMsgs(p => { const u=[...p]; const l=u[u.length-1]; if(l) l.streaming=false; return u; });
     } catch (err) {
       const isLimit = err.message?.includes('Daily limit');
+      if (isLimit) setShowPaywall(true);
       setMsgs(p => { const u=[...p]; const l=u[u.length-1];
         if(l&&l.role==='assistant'&&!l.content) { l.content=isLimit?'🔒 Daily limit reached (20 free). Upgrade for unlimited.':'⚠️ '+err.message; l.error=true; }
         else u.push({role:'assistant',content:'⚠️ '+err.message,error:true});
@@ -53,11 +110,37 @@ export default function UserPanel({ t, userId }) {
     setLoading(false);
   };
 
+  const checkout = async (planCode) => {
+    if (!planCode || checkoutPlanCode) return;
+    setCheckoutPlanCode(planCode);
+    setBillingError('');
+    try {
+      const result = await api.billing.checkout(userId, planCode, 'telegram_stars', {
+        source: 'user_panel_paywall',
+      });
+      const invoiceLink = result?.providerPayload?.invoiceLink;
+
+      if (invoiceLink && window.Telegram?.WebApp?.openInvoice) {
+        await new Promise((resolve) => {
+          window.Telegram.WebApp.openInvoice(invoiceLink, () => resolve());
+        });
+      } else if (invoiceLink) {
+        window.open(invoiceLink, '_blank', 'noopener,noreferrer');
+      }
+
+      await refreshBilling();
+    } catch (err) {
+      setBillingError(String(err?.message || 'Checkout failed'));
+    } finally {
+      setCheckoutPlanCode('');
+    }
+  };
+
   const clear = async () => { await api.clearSession(userId); setMsgs([]); };
   const cur = models.find(m => m.id === model);
 
   return (
-    <div className="flex flex-col h-[calc(100vh-48px)]">
+    <div className="relative flex flex-col h-[calc(100vh-48px)]">
       {/* Top bar */}
       <div className="px-3 py-2 border-b border-white/5 flex-shrink-0">
         <div className="flex items-center gap-1.5">
@@ -135,6 +218,37 @@ export default function UserPanel({ t, userId }) {
         </div>
       )}
 
+      {!billingLoading && (
+        <div className="px-3 py-2 border-b border-white/5">
+          {activeSubscription ? (
+            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 flex items-center gap-2">
+              <span className="text-xs">✅</span>
+              <div className="min-w-0">
+                <p className="text-[11px] text-emerald-300 truncate">
+                  Plan: {activeSubscription.plan_code || 'active'} until {formatPeriodEnd(activeSubscription.current_period_end)}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 flex items-center gap-2">
+              <span className="text-xs">🔒</span>
+              <p className="text-[11px] text-amber-300 flex-1 min-w-0 truncate">
+                Free access has limits. Upgrade to unlock higher caps.
+              </p>
+              <button
+                onClick={() => setShowPaywall(true)}
+                className="px-2.5 py-1 rounded-lg text-[10px] font-semibold bg-amber-500 text-black"
+              >
+                Upgrade
+              </button>
+            </div>
+          )}
+          {billingError && (
+            <p className="text-[10px] text-red-300/90 mt-1">{billingError}</p>
+          )}
+        </div>
+      )}
+
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-3 py-4 space-y-2.5">
         {msgs.length === 0 && (
@@ -174,6 +288,36 @@ export default function UserPanel({ t, userId }) {
           </button>
         </div>
       </div>
+
+      {showPaywall && (
+        <div className="absolute inset-0 z-40 bg-black/70 backdrop-blur-sm p-3 flex items-end">
+          <div className="w-full rounded-2xl border border-white/10 bg-surface-1 p-3 max-h-[78vh] overflow-y-auto">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-sm">💳</span>
+              <h3 className="text-sm font-semibold text-white/85">Upgrade plan</h3>
+              <button onClick={() => setShowPaywall(false)} className="ml-auto text-xs text-white/50 hover:text-white/80">Close</button>
+            </div>
+            <div className="space-y-2">
+              {plans.map((plan) => (
+                <div key={plan.code} className="rounded-xl border border-white/10 bg-surface-2 p-3">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-semibold text-white/85">{plan.name}</p>
+                    <span className="ml-auto text-xs text-amber-300">{plan.price_xtr} {plan.currency || 'XTR'}</span>
+                  </div>
+                  <p className="text-[11px] text-white/50 mt-1">{plan.description || 'Subscription plan'}</p>
+                  <button
+                    onClick={() => checkout(plan.code)}
+                    disabled={!!checkoutPlanCode}
+                    className="mt-2 w-full rounded-lg bg-amber-500 text-black text-xs font-semibold py-2 disabled:opacity-50"
+                  >
+                    {checkoutPlanCode === plan.code ? 'Processing...' : `Pay ${plan.price_xtr} ${plan.currency || 'XTR'}`}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -71,6 +71,17 @@ function authHeaders(json = true, requireTelegram = false) {
   return headers;
 }
 
+function buildIdempotencyKey(prefix = 'req') {
+  try {
+    if (window.crypto?.randomUUID) {
+      return `${prefix}_${window.crypto.randomUUID()}`;
+    }
+  } catch {
+    // no-op
+  }
+  return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
+}
+
 export async function fetchModels(userId) {
   const res = await fetch(`${BASE}/models?userId=${userId || ''}`, {
     headers: authHeaders(false, false),
@@ -170,6 +181,38 @@ export async function clearSession(telegramId) {
   return res.json();
 }
 
+export async function billingPlans() {
+  const res = await fetch(`${BASE}/billing/plans`, { headers: authHeaders(false, false) });
+  if (!res.ok) throw new Error(await readError(res, 'Billing plans failed'));
+  const data = await res.json();
+  return data.plans || [];
+}
+
+export async function billingMe(telegramId) {
+  const res = await fetch(`${BASE}/billing/me/${telegramId}`, {
+    headers: authHeaders(false, true),
+  });
+  if (!res.ok) throw new Error(await readError(res, 'Billing me failed'));
+  return res.json();
+}
+
+export async function billingCheckout(telegramId, planCode, provider = 'telegram_stars', metadata = {}) {
+  const idempotencyKey = buildIdempotencyKey('checkout');
+  const headers = {
+    ...authHeaders(true, true),
+    'X-Idempotency-Key': idempotencyKey,
+  };
+
+  const res = await fetch(`${BASE}/billing/checkout/${telegramId}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ planCode, provider, metadata }),
+  });
+
+  if (!res.ok) throw new Error(await readError(res, 'Billing checkout failed'));
+  return res.json();
+}
+
 export const api = {
   models: fetchModels,
   chat: sendChat,
@@ -179,6 +222,9 @@ export const api = {
   deleteByokKey,
   getSession,
   clearSession,
+  billingPlans,
+  billingMe,
+  billingCheckout,
 };
 
 export async function vaultSave(telegramId, category, data) {
@@ -223,3 +269,4 @@ export async function health() {
 }
 
 api.health = health;
+api.billing = { plans: billingPlans, me: billingMe, checkout: billingCheckout };

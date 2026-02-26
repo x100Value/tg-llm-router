@@ -51,9 +51,13 @@ router.post('/api/billing/checkout/:telegramId', validateTelegram, requireTelegr
 
     const checkout = await billingService.createCheckout(telegramId, planCode, provider, idempotencyKey, metadata);
 
+    const mode = checkout.providerPayload?.invoiceLink
+      ? 'telegram_open_invoice'
+      : 'provider_redirect';
+
     res.json({
       success: true,
-      mode: 'provider_redirect',
+      mode,
       reused: checkout.reused,
       provider,
       plan: {
@@ -64,6 +68,7 @@ router.post('/api/billing/checkout/:telegramId', validateTelegram, requireTelegr
         interval_days: checkout.plan.interval_days,
       },
       payment: checkout.payment,
+      providerPayload: checkout.providerPayload || null,
     });
   } catch (err) {
     if (err.code === 'PLAN_NOT_FOUND') {
@@ -82,16 +87,25 @@ router.post('/api/billing/webhook', async (req, res) => {
       }
     }
 
+    const body = req.body || {};
+    const rawUpdate = body.rawUpdate || body.update || body;
+    const successfulPayment = rawUpdate?.message?.successful_payment || body?.successful_payment || null;
+    const inferredProvider = successfulPayment
+      ? 'telegram_stars'
+      : (body.provider || BILLING_DEFAULT_PROVIDER);
+
     const result = await billingService.processWebhook({
-      provider: req.body?.provider || BILLING_DEFAULT_PROVIDER,
-      externalPaymentId: req.body?.externalPaymentId,
-      externalSubscriptionId: req.body?.externalSubscriptionId,
-      telegramId: req.body?.telegramId,
-      planCode: req.body?.planCode,
-      amount: req.body?.amount,
-      currency: req.body?.currency,
-      status: req.body?.status,
-      metadata: parseJsonSafe(req.body?.metadata),
+      provider: inferredProvider,
+      externalPaymentId: body.externalPaymentId,
+      externalSubscriptionId: body.externalSubscriptionId,
+      telegramId: body.telegramId,
+      planCode: body.planCode,
+      amount: body.amount,
+      currency: body.currency,
+      status: body.status,
+      metadata: parseJsonSafe(body.metadata),
+      rawUpdate,
+      successful_payment: body.successful_payment,
     });
 
     res.json(result);

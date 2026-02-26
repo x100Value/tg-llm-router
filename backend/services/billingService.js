@@ -4,6 +4,8 @@ const { Pool } = require('pg');
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const BILLING_DEFAULT_PROVIDER = process.env.BILLING_DEFAULT_PROVIDER || 'telegram_stars';
 const BILLING_CURRENCY = process.env.BILLING_CURRENCY || 'XTR';
+const TELEGRAM_INVOICE_PREFIX = process.env.TELEGRAM_INVOICE_PREFIX || 'rtx';
+const BOT_TOKEN = process.env.BOT_TOKEN || '';
 
 const DEFAULT_PLANS = [
   {
@@ -100,6 +102,160 @@ class BillingService {
     await this.seedDefaultPlans();
   }
 
+  buildInvoicePayload(telegramId, planCode, externalPaymentId) {
+    return `${TELEGRAM_INVOICE_PREFIX}|p:${externalPaymentId}|plan:${planCode}|uid:${telegramId}`;
+  }
+
+  parseInvoicePayload(payload) {
+    const raw = String(payload || '').trim();
+    if (!raw) return { planCode: '', externalPaymentId: '', telegramId: '' };
+
+    if (raw.startsWith('{')) {
+      try {
+        const json = JSON.parse(raw);
+        return {
+          planCode: String(json.planCode || json.plan || '').trim(),
+          externalPaymentId: String(json.externalPaymentId || json.paymentId || '').trim(),
+          telegramId: String(json.telegramId || json.uid || '').trim(),
+        };
+      } catch {
+        // fallback to token parsing
+      }
+    }
+
+    const parts = raw.split('|');
+    const parsed = { planCode: '', externalPaymentId: '', telegramId: '' };
+
+    for (const part of parts) {
+      if (part.startsWith('plan:')) parsed.planCode = part.slice(5);
+      if (part.startsWith('p:')) parsed.externalPaymentId = part.slice(2);
+      if (part.startsWith('uid:')) parsed.telegramId = part.slice(4);
+    }
+
+    return parsed;
+  }
+
+  buildTelegramStarsDraft(plan, invoicePayload) {
+    return {
+      type: 'telegram_stars_invoice_draft',
+      title: `${plan.name} Plan`,
+      description: plan.description || `${plan.name} subscription`,
+      payload: invoicePayload,
+      currency: plan.currency || BILLING_CURRENCY,
+      prices: [{ label: `${plan.name} (${plan.interval_days}d)`, amount: plan.price_xtr }],
+      invoiceLink: null,
+      error: null,
+    };
+  }
+
+  async createTelegramStarsInvoiceLink(plan, invoicePayload) {
+    const draft = this.buildTelegramStarsDraft(plan, invoicePayload);
+    if (!BOT_TOKEN) {
+      return { ...draft, error: 'BOT_TOKEN missing' };
+    }
+
+    const params = new URLSearchParams();
+    params.set('title', String(draft.title).slice(0, 32));
+    params.set('description', String(draft.description).slice(0, 255));
+    params.set('payload', invoicePayload);
+    params.set('currency', draft.currency);
+    params.set('prices', JSON.stringify(draft.prices));
+
+    try {
+      const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/createInvoiceLink`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString(),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.ok || !data?.result) {
+        return {
+          ...draft,
+          error: String(data?.description || `createInvoiceLink failed (${response.status})`),
+        };
+      }
+
+      return {
+        ...draft,
+        type: 'telegram_stars_invoice',
+        invoiceLink: data.result,
+        error: null,
+      };
+    } catch (err) {
+      return {
+        ...draft,
+        error: String(err?.message || 'createInvoiceLink failed'),
+      };
+    }
+  }
+
+  async buildProviderPayload(provider, plan, invoicePayload) {
+    const normalizedProvider = String(provider || BILLING_DEFAULT_PROVIDER).trim();
+    if (normalizedProvider === 'telegram_stars') {
+      return this.createTelegramStarsInvoiceLink(plan, invoicePayload);
+    }
+    return null;
+  }
+
+  normalizeWebhookEvent(event) {
+    const rawUpdate = event?.rawUpdate || null;
+
+    const successfulPayment =
+      rawUpdate?.message?.successful_payment ||
+      event?.successful_payment ||
+      null;
+
+    if (successfulPayment) {
+      const parsed = this.parseInvoicePayload(successfulPayment.invoice_payload);
+      const telegramId = String(
+        rawUpdate?.message?.from?.id ||
+        event?.telegramId ||
+        parsed.telegramId ||
+        ''
+      ).trim();
+
+      const externalPaymentId = String(
+        parsed.externalPaymentId ||
+        successfulPayment.telegram_payment_charge_id ||
+        successfulPayment.provider_payment_charge_id ||
+        event?.externalPaymentId ||
+        ''
+      ).trim();
+
+      return {
+        provider: 'telegram_stars',
+        externalPaymentId,
+        externalSubscriptionId: event?.externalSubscriptionId || null,
+        telegramId,
+        planCode: String(event?.planCode || parsed.planCode || '').trim(),
+        amount: Number(event?.amount || successfulPayment.total_amount || 0),
+        currency: String(event?.currency || successfulPayment.currency || BILLING_CURRENCY),
+        status: String(event?.status || 'succeeded').toLowerCase(),
+        metadata: {
+          ...(event?.metadata || {}),
+          telegramUpdateId: rawUpdate?.update_id || null,
+          telegramMessageId: rawUpdate?.message?.message_id || null,
+          invoicePayload: successfulPayment.invoice_payload || null,
+          telegramPaymentChargeId: successfulPayment.telegram_payment_charge_id || null,
+          providerPaymentChargeId: successfulPayment.provider_payment_charge_id || null,
+        },
+      };
+    }
+
+    return {
+      provider: String(event?.provider || BILLING_DEFAULT_PROVIDER),
+      externalPaymentId: String(event?.externalPaymentId || '').trim(),
+      externalSubscriptionId: event?.externalSubscriptionId || null,
+      telegramId: String(event?.telegramId || '').trim(),
+      planCode: String(event?.planCode || '').trim(),
+      amount: Number(event?.amount || 0),
+      currency: String(event?.currency || BILLING_CURRENCY),
+      status: String(event?.status || '').trim().toLowerCase(),
+      metadata: event?.metadata || {},
+    };
+  }
+
   async seedDefaultPlans() {
     for (const plan of DEFAULT_PLANS) {
       await pool.query(
@@ -186,50 +342,75 @@ class BillingService {
       throw err;
     }
 
+    const normalizedProvider = String(provider || BILLING_DEFAULT_PROVIDER).trim();
     const normalizedIdem = String(idempotencyKey || '').trim().slice(0, 128) || null;
+
     if (normalizedIdem) {
       const existing = await pool.query(
-        `SELECT id, external_payment_id, plan_code, amount, currency, status, provider, created_at
+        `SELECT id, external_payment_id, plan_code, amount, currency, status, provider, payload, created_at
          FROM payments
          WHERE telegram_id=$1 AND idempotency_key=$2
          LIMIT 1`,
         [telegramId, normalizedIdem]
       );
       if (existing.rows[0]) {
-        return { payment: existing.rows[0], reused: true, plan };
+        return {
+          payment: existing.rows[0],
+          reused: true,
+          plan,
+          providerPayload: existing.rows[0].payload?.providerPayload || null,
+        };
       }
     }
 
     const externalPaymentId = `chk_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
+    const invoicePayload = this.buildInvoicePayload(telegramId, plan.code, externalPaymentId);
+
+    const providerPayload = await this.buildProviderPayload(
+      normalizedProvider,
+      plan,
+      invoicePayload
+    );
+
+    const payload = {
+      ...metadata,
+      invoicePayload,
+      providerPayload,
+      planCode: plan.code,
+      telegramId,
+    };
+
     const { rows } = await pool.query(
       `INSERT INTO payments(
         telegram_id, provider, external_payment_id, plan_code, idempotency_key, amount, currency, status, payload, updated_at
       ) VALUES($1,$2,$3,$4,$5,$6,$7,'pending',$8::jsonb,NOW())
-      RETURNING id, external_payment_id, plan_code, amount, currency, status, provider, created_at`,
+      RETURNING id, external_payment_id, plan_code, amount, currency, status, provider, payload, created_at`,
       [
         telegramId,
-        provider || BILLING_DEFAULT_PROVIDER,
+        normalizedProvider,
         externalPaymentId,
         plan.code,
         normalizedIdem,
         plan.price_xtr,
         plan.currency || BILLING_CURRENCY,
-        JSON.stringify(metadata || {}),
+        JSON.stringify(payload),
       ]
     );
 
-    return { payment: rows[0], reused: false, plan };
+    return { payment: rows[0], reused: false, plan, providerPayload };
   }
 
   async processWebhook(event) {
-    const provider = String(event.provider || BILLING_DEFAULT_PROVIDER);
-    const externalPaymentId = String(event.externalPaymentId || '').trim();
-    const status = String(event.status || '').trim().toLowerCase();
-    const telegramId = String(event.telegramId || '').trim();
-    const planCode = String(event.planCode || '').trim();
-    const amount = Number(event.amount || 0);
-    const currency = String(event.currency || BILLING_CURRENCY);
-    const metadata = event.metadata || {};
+    const normalized = this.normalizeWebhookEvent(event);
+
+    const provider = normalized.provider;
+    const externalPaymentId = normalized.externalPaymentId;
+    const status = normalized.status;
+    const telegramId = normalized.telegramId;
+    const planCode = normalized.planCode;
+    const amount = normalized.amount;
+    const currency = normalized.currency;
+    const metadata = normalized.metadata || {};
 
     if (!externalPaymentId || !telegramId || !planCode || !status) {
       const err = new Error('Invalid webhook payload');
@@ -250,6 +431,7 @@ class BillingService {
     );
 
     const existing = existingRows[0];
+    let shouldApplySubscription = false;
 
     if (!existing) {
       await pool.query(
@@ -258,17 +440,27 @@ class BillingService {
         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,NOW())`,
         [telegramId, provider, externalPaymentId, planCode, amount || plan.price_xtr, currency, status, JSON.stringify(metadata)]
       );
-    } else if (existing.status !== status) {
-      await pool.query(
-        `UPDATE payments
-         SET status=$3, payload=$4::jsonb, updated_at=NOW()
-         WHERE provider=$1 AND external_payment_id=$2`,
-        [provider, externalPaymentId, status, JSON.stringify(metadata)]
-      );
+      shouldApplySubscription = status === 'succeeded';
+    } else {
+      if (existing.status !== status) {
+        await pool.query(
+          `UPDATE payments
+           SET status=$3, payload=$4::jsonb, updated_at=NOW()
+           WHERE provider=$1 AND external_payment_id=$2`,
+          [provider, externalPaymentId, status, JSON.stringify(metadata)]
+        );
+      }
+      shouldApplySubscription = status === 'succeeded' && existing.status !== 'succeeded';
     }
 
-    if (status === 'succeeded') {
-      const subscription = await this.activateSubscription(telegramId, plan, provider, event.externalSubscriptionId || null, metadata);
+    if (shouldApplySubscription) {
+      const subscription = await this.activateSubscription(
+        telegramId,
+        plan,
+        provider,
+        normalized.externalSubscriptionId || null,
+        metadata
+      );
       await this.syncEntitlements(telegramId, plan, subscription.current_period_end);
       return { ok: true, status, subscriptionApplied: true };
     }
