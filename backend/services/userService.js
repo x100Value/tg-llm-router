@@ -5,6 +5,7 @@ const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'default-dev-key-change-in-
 const MESSAGE_ENCRYPTION_ENABLED = (process.env.MESSAGE_ENCRYPTION_ENABLED || 'true').toLowerCase() !== 'false';
 const MESSAGE_ENCRYPTION_PREFIX = process.env.MESSAGE_ENCRYPTION_PREFIX || 'enc:v1:';
 const PER_USER_DAILY_REQUEST_CAP = parseInt(process.env.PER_USER_DAILY_REQUEST_CAP || '0', 10);
+const FREE_DAILY_REQUEST_CAP = parseInt(process.env.FREE_DAILY_REQUEST_CAP || '20', 10);
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 class UserService {
@@ -155,29 +156,80 @@ class UserService {
     return { ...user, settings: merged };
   }
 
+  _parsePositiveInt(value) {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return Math.floor(value);
+    if (typeof value === 'string') {
+      const parsed = parseInt(value, 10);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+    if (value && typeof value === 'object') {
+      if (value.dailyCap != null) return this._parsePositiveInt(value.dailyCap);
+      if (value.limit != null) return this._parsePositiveInt(value.limit);
+      if (value.value != null) return this._parsePositiveInt(value.value);
+    }
+    return null;
+  }
+
+  async getTodayUsageCount(telegramId) {
+    const { rows } = await pool.query(
+      `SELECT COUNT(*)::int AS total
+       FROM transactions
+       WHERE telegram_id=$1
+         AND created_at >= date_trunc('day', NOW())`,
+      [telegramId]
+    );
+    return rows[0]?.total || 0;
+  }
+
+  async getPlanDailyCap(telegramId) {
+    const { rows } = await pool.query(
+      `SELECT value
+       FROM entitlements
+       WHERE telegram_id=$1
+         AND key='dailyCap'
+         AND source='plan'
+         AND (expires_at IS NULL OR expires_at > NOW())
+       ORDER BY expires_at DESC NULLS LAST
+       LIMIT 1`,
+      [telegramId]
+    );
+
+    if (!rows[0]) return null;
+    return this._parsePositiveInt(rows[0].value);
+  }
+
   async reserveRequest(telegramId) {
     if (this.fallback) return { type: 'fallback', field: null, remaining: null };
 
-    if (Number.isFinite(PER_USER_DAILY_REQUEST_CAP) && PER_USER_DAILY_REQUEST_CAP > 0) {
-      const usage = await pool.query(
-        `SELECT COUNT(*)::int AS total
-         FROM transactions
-         WHERE telegram_id=$1
-           AND created_at >= date_trunc('day', NOW())`,
-        [telegramId]
-      );
+    const usedToday = await this.getTodayUsageCount(telegramId);
 
-      const total = usage.rows[0]?.total || 0;
-      if (total >= PER_USER_DAILY_REQUEST_CAP) {
+    if (Number.isFinite(PER_USER_DAILY_REQUEST_CAP) && PER_USER_DAILY_REQUEST_CAP > 0) {
+      if (usedToday >= PER_USER_DAILY_REQUEST_CAP) {
         const err = new Error('Per-user daily request cap reached. Try again tomorrow.');
         err.code = 'USER_DAILY_CAP_REACHED';
         throw err;
       }
     }
 
+    const planDailyCap = await this.getPlanDailyCap(telegramId);
+    if (Number.isFinite(planDailyCap) && planDailyCap > 0) {
+      if (usedToday >= planDailyCap) {
+        const err = new Error(`Daily limit reached (${planDailyCap} on your plan). Upgrade for higher limits.`);
+        err.code = 'LIMIT_REACHED';
+        throw err;
+      }
+
+      return {
+        type: 'plan',
+        field: null,
+        remaining: Math.max(planDailyCap - usedToday - 1, 0),
+        dailyCap: planDailyCap,
+      };
+    }
+
     await pool.query('INSERT INTO balances(telegram_id) VALUES($1) ON CONFLICT DO NOTHING', [telegramId]);
 
-    let result = await pool.query(
+    const paidCredits = await pool.query(
       `UPDATE balances
        SET paid_credits = paid_credits - 1, updated_at = NOW()
        WHERE telegram_id=$1 AND paid_credits > 0
@@ -185,33 +237,35 @@ class UserService {
       [telegramId]
     );
 
-    if (result.rows[0]) {
+    if (paidCredits.rows[0]) {
       return {
-        type: 'paid',
+        type: 'paid_credit',
         field: 'paid_credits',
-        remaining: parseInt(result.rows[0].paid_credits, 10),
+        remaining: parseInt(paidCredits.rows[0].paid_credits, 10),
       };
     }
 
-    result = await pool.query(
-      `UPDATE balances
-       SET free_requests = free_requests - 1, updated_at = NOW()
-       WHERE telegram_id=$1 AND paid_credits <= 0 AND free_requests > 0
-       RETURNING paid_credits, free_requests`,
-      [telegramId]
-    );
-
-    if (result.rows[0]) {
+    if (!Number.isFinite(FREE_DAILY_REQUEST_CAP) || FREE_DAILY_REQUEST_CAP <= 0) {
       return {
         type: 'free',
-        field: 'free_requests',
-        remaining: parseInt(result.rows[0].free_requests, 10),
+        field: null,
+        remaining: null,
+        dailyCap: null,
       };
     }
 
-    const err = new Error('Daily limit reached (20 free). Upgrade for unlimited.');
-    err.code = 'LIMIT_REACHED';
-    throw err;
+    if (usedToday >= FREE_DAILY_REQUEST_CAP) {
+      const err = new Error(`Daily limit reached (${FREE_DAILY_REQUEST_CAP} free). Upgrade for unlimited.`);
+      err.code = 'LIMIT_REACHED';
+      throw err;
+    }
+
+    return {
+      type: 'free',
+      field: null,
+      remaining: Math.max(FREE_DAILY_REQUEST_CAP - usedToday - 1, 0),
+      dailyCap: FREE_DAILY_REQUEST_CAP,
+    };
   }
 
   async rollbackRequest(telegramId, reservation) {
@@ -221,12 +275,17 @@ class UserService {
   }
 
   async finalizeRequest(telegramId, reservation, meta = {}) {
-    if (this.fallback || !reservation || !reservation.field) return;
+    if (this.fallback || !reservation) return;
+
+    const typeBase = String(reservation.type || 'request').trim() || 'request';
+    const endpoint = String(meta?.endpoint || '').trim();
+    const type = endpoint ? `${typeBase}:${endpoint}`.slice(0, 120) : typeBase.slice(0, 120);
+    const model = meta?.model ? String(meta.model).slice(0, 255) : null;
 
     try {
       await pool.query(
-        'INSERT INTO transactions(telegram_id, amount, type, meta) VALUES($1,$2,$3,$4)',
-        [telegramId, 1, reservation.type, JSON.stringify(meta)]
+        'INSERT INTO transactions(telegram_id, amount, type, model) VALUES($1,$2,$3,$4)',
+        [telegramId, 1, type, model]
       );
     } catch {
       // optional table/columns; do not fail user response if transaction log insert is unavailable

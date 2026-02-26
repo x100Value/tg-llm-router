@@ -17,6 +17,7 @@ const statsRoutes = require('./routes/stats');
 const personasRoutes = require('./routes/personas');
 const modesRoutes = require('./routes/modes');
 const billingRoutes = require('./routes/billing');
+const telegramWebhookRoutes = require('./routes/telegramWebhook');
 
 const llmRouter = require('./router/llmRouter');
 const userService = require('./services/userService');
@@ -34,6 +35,7 @@ app.use(statsRoutes);
 app.use(personasRoutes);
 app.use(modesRoutes);
 app.use(billingRoutes);
+app.use(telegramWebhookRoutes);
 
 function getIdempotencyKey(req) {
   const fromHeader = req.headers['x-idempotency-key'];
