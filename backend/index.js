@@ -236,7 +236,7 @@ app.delete('/api/session/:telegramId', validateTelegram, requireTelegramUserMatc
 const tonRoutes = require('./routes/ton');
 const vaultRoutes = require('./routes/vault');
 app.use(tonRoutes);
-app.use(rateLimiter, vaultRoutes);
+app.use(rateLimiter, validateTelegram, requireTelegramUserMatch, vaultRoutes);
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (req, res) => {

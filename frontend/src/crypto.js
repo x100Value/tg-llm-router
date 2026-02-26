@@ -2,7 +2,7 @@
 
 const ALGO = 'AES-GCM';
 const KEY_LENGTH = 256;
-const PBKDF2_ITERATIONS = 100000;
+const PBKDF2_ITERATIONS = 250000;
 
 // Derive AES key from password/pin + salt
 async function deriveKey(password, salt) {
