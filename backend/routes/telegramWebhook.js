@@ -29,6 +29,42 @@ async function callTelegram(method, payload) {
   return data.result;
 }
 
+async function answerPreCheckout(preCheckoutQueryId, ok, errorMessage = '') {
+  const payload = { pre_checkout_query_id: preCheckoutQueryId, ok: !!ok };
+  if (!ok && errorMessage) payload.error_message = String(errorMessage).slice(0, 200);
+  return callTelegram('answerPreCheckoutQuery', payload);
+}
+
+async function validatePreCheckout(preCheckout) {
+  const parsed = billingService.parseInvoicePayload(preCheckout?.invoice_payload);
+  const telegramIdFromPayload = String(parsed?.telegramId || '').trim();
+  const telegramIdFromUpdate = String(preCheckout?.from?.id || '').trim();
+  const planCode = String(parsed?.planCode || '').trim();
+
+  if (!telegramIdFromPayload || !planCode || !parsed?.externalPaymentId) {
+    return { ok: false, reason: 'Invalid invoice payload' };
+  }
+
+  if (!telegramIdFromUpdate || telegramIdFromPayload !== telegramIdFromUpdate) {
+    return { ok: false, reason: 'User mismatch for invoice' };
+  }
+
+  const plan = await billingService.getPlan(planCode);
+  if (!plan || !plan.active) {
+    return { ok: false, reason: 'Plan is not available' };
+  }
+
+  if (Number(preCheckout?.total_amount || 0) !== Number(plan.price_xtr || 0)) {
+    return { ok: false, reason: 'Invalid payment amount' };
+  }
+
+  if (String(preCheckout?.currency || '').toUpperCase() !== String(plan.currency || '').toUpperCase()) {
+    return { ok: false, reason: 'Invalid payment currency' };
+  }
+
+  return { ok: true };
+}
+
 router.post('/api/telegram/webhook', async (req, res) => {
   try {
     if (TELEGRAM_WEBHOOK_SECRET) {
@@ -44,10 +80,18 @@ router.post('/api/telegram/webhook', async (req, res) => {
 
     let preCheckoutApproved = false;
     if (preCheckout?.id) {
-      await callTelegram('answerPreCheckoutQuery', {
-        pre_checkout_query_id: preCheckout.id,
-        ok: true,
-      });
+      const validation = await validatePreCheckout(preCheckout);
+      if (!validation.ok) {
+        await answerPreCheckout(preCheckout.id, false, validation.reason);
+        return res.json({
+          ok: true,
+          preCheckoutApproved: false,
+          billing: null,
+          ignored: false,
+          rejected: validation.reason,
+        });
+      }
+      await answerPreCheckout(preCheckout.id, true);
       preCheckoutApproved = true;
     }
 
