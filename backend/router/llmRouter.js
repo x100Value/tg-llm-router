@@ -40,6 +40,23 @@ class LLMRouter {
     }
   }
 
+  async _tryHuggingFaceFallback(messages, byokKeys = {}) {
+    try {
+      const hfModels = await huggingface.listModels(byokKeys.huggingface);
+      for (const model of hfModels.slice(0, 3)) {
+        try {
+          const result = await huggingface.chat(model.id, messages, byokKeys.huggingface || null);
+          return { ...result, fallback: true };
+        } catch {
+          // try next HF model
+        }
+      }
+    } catch {
+      // ignore hf list failure
+    }
+    return null;
+  }
+
   async chat(modelId, messages, byokKeys = {}) {
     await this.refreshFreeModels();
 
@@ -79,6 +96,9 @@ class LLMRouter {
       }
     }
 
+    const hfResult = await this._tryHuggingFaceFallback(messages, byokKeys);
+    if (hfResult) return hfResult;
+
     void alertService.notifyProviderFailure('all_failed', 'router', target, 'All LLM providers failed');
     throw new Error('All LLM providers failed.');
   }
@@ -100,7 +120,9 @@ class LLMRouter {
       yield* p.chatStream(target, messages, byokKeys[provider] || null);
     } catch (err) {
       void alertService.notifyProviderFailure('stream', provider, target, err.message);
-      throw err;
+
+      const fallback = await this.chat(modelId, messages, byokKeys);
+      yield fallback.content;
     }
   }
 

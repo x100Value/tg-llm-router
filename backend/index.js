@@ -32,6 +32,32 @@ app.use(statsRoutes);
 app.use(personasRoutes);
 app.use(modesRoutes);
 
+function mapClientFacingError(err) {
+  const raw = String(err?.message || 'Internal error');
+
+  if (raw.includes('No endpoints found matching your data policy')) {
+    return {
+      status: 503,
+      code: 'OPENROUTER_POLICY_BLOCK',
+      message: 'Модель временно недоступна из-за политики OpenRouter. Попробуйте позже.',
+    };
+  }
+
+  if (raw.includes('All LLM providers failed')) {
+    return {
+      status: 503,
+      code: 'LLM_PROVIDERS_UNAVAILABLE',
+      message: 'Сервис ИИ временно недоступен. Попробуйте через минуту.',
+    };
+  }
+
+  return {
+    status: 500,
+    code: 'LLM_REQUEST_FAILED',
+    message: 'Внутренняя ошибка сервиса. Попробуйте позже.',
+  };
+}
+
 async function reserveQuotaOrReject(userId, res) {
   try {
     const reservation = await userService.reserveRequest(userId);
@@ -73,7 +99,8 @@ app.get('/api/models', async (req, res) => {
     const models = await llmRouter.listAllModels(byok);
     res.json({ models });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    const mapped = mapClientFacingError(err);
+    res.status(mapped.status).json({ error: mapped.message, code: mapped.code });
   }
 });
 
@@ -111,7 +138,8 @@ app.post('/api/chat', validateTelegram, requireTelegramUserMatch, rateLimiter, a
   } catch (err) {
     if (reservation) await rollbackQuotaSafe(userId, reservation, 'Chat');
     console.error('[Chat]', err.message);
-    res.status(500).json({ error: err.message });
+    const mapped = mapClientFacingError(err);
+    res.status(mapped.status).json({ error: mapped.message, code: mapped.code });
   }
 });
 
@@ -162,10 +190,11 @@ app.post('/api/chat/stream', validateTelegram, requireTelegramUserMatch, rateLim
     if (reservation) await rollbackQuotaSafe(userId, reservation, 'Stream');
     console.error('[Stream]', err.message);
 
+    const mapped = mapClientFacingError(err);
     if (!res.headersSent) {
-      res.status(500).json({ error: err.message });
+      res.status(mapped.status).json({ error: mapped.message, code: mapped.code });
     } else {
-      res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+      res.write(`data: ${JSON.stringify({ error: mapped.message, code: mapped.code })}\n\n`);
       res.end();
     }
   }
