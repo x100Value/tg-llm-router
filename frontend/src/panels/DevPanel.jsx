@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../api';
 
-const TABS = ['keys', 'docs', 'playground', 'usage'];
+const TABS = ['keys', 'docs', 'playground', 'usage', 'terminal'];
 const PROVIDERS = ['openrouter', 'huggingface'];
 const API_ENDPOINTS = [
   { m: 'POST', p: '/api/chat', d: '{ userId, model, message } → { response }' },
@@ -63,7 +63,8 @@ export default function DevPanel({ t, userId }) {
   };
   useEffect(() => { if (tab === 'usage') loadUsage(); }, [tab]);
 
-  const tabMeta = { keys: { icon: '🔑', label: t.apiKeys }, docs: { icon: '📖', label: t.apiDocs || 'API' }, playground: { icon: '🧪', label: t.playground || 'Test' }, usage: { icon: '📊', label: t.usage || 'Usage' } };
+  const tabMeta = { keys: { icon: '🔑', label: t.apiKeys }, docs: { icon: '📖', label: t.apiDocs || 'API' }, playground: { icon: '🧪', label: t.playground || 'Test' }, usage: { icon: '📊', label: t.usage || 'Usage' }   terminal: { icon: '⬛', label: 'Terminal' },
+};
 
   return (
     <div className="flex flex-col h-[calc(100vh-48px)]">
