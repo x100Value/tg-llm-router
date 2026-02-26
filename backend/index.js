@@ -7,6 +7,7 @@ const path = require('path');
 const logger = require('./middleware/logger');
 const rateLimiter = require('./middleware/rateLimiter');
 const antiSpam = require('./middleware/antiSpam');
+const globalBudgetGuard = require('./middleware/globalBudgetGuard');
 const tokenCap = require('./middleware/tokenCap');
 const promptShield = require('./middleware/promptShield');
 const validateTelegram = require('./middleware/validateTelegram');
@@ -70,7 +71,7 @@ app.get('/api/models', async (req, res) => {
   }
 });
 
-app.post('/api/chat', validateTelegram, requireTelegramUserMatch, rateLimiter, antiSpam, tokenCap, promptShield, async (req, res) => {
+app.post('/api/chat', validateTelegram, requireTelegramUserMatch, rateLimiter, antiSpam, globalBudgetGuard, tokenCap, promptShield, async (req, res) => {
   const { userId, model, message } = req.body;
   const isPrivate = req.body.private === true;
   let reservation = null;
@@ -108,7 +109,7 @@ app.post('/api/chat', validateTelegram, requireTelegramUserMatch, rateLimiter, a
   }
 });
 
-app.post('/api/chat/stream', validateTelegram, requireTelegramUserMatch, rateLimiter, antiSpam, tokenCap, promptShield, async (req, res) => {
+app.post('/api/chat/stream', validateTelegram, requireTelegramUserMatch, rateLimiter, antiSpam, globalBudgetGuard, tokenCap, promptShield, async (req, res) => {
   const { userId, model, message } = req.body;
   const isPrivate = req.body.private === true;
   let reservation = null;
