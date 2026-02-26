@@ -2,6 +2,8 @@ const { Pool } = require('pg');
 const CryptoJS = require('crypto-js');
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'default-dev-key-change-in-prod!!';
+const MESSAGE_ENCRYPTION_ENABLED = (process.env.MESSAGE_ENCRYPTION_ENABLED || 'true').toLowerCase() !== 'false';
+const MESSAGE_ENCRYPTION_PREFIX = process.env.MESSAGE_ENCRYPTION_PREFIX || 'enc:v1:';
 const PER_USER_DAILY_REQUEST_CAP = parseInt(process.env.PER_USER_DAILY_REQUEST_CAP || '0', 10);
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -15,6 +17,26 @@ class UserService {
       this.fallback = true;
       this.users = new Map();
       this.sessions = new Map();
+    }
+  }
+
+  _encryptMessage(content) {
+    const raw = String(content ?? '');
+    if (!MESSAGE_ENCRYPTION_ENABLED) return raw;
+    const encrypted = CryptoJS.AES.encrypt(raw, ENCRYPTION_KEY).toString();
+    return `${MESSAGE_ENCRYPTION_PREFIX}${encrypted}`;
+  }
+
+  _decryptMessage(content) {
+    const raw = String(content ?? '');
+    if (!raw.startsWith(MESSAGE_ENCRYPTION_PREFIX)) return raw;
+
+    const encrypted = raw.slice(MESSAGE_ENCRYPTION_PREFIX.length);
+    try {
+      const decrypted = CryptoJS.AES.decrypt(encrypted, ENCRYPTION_KEY).toString(CryptoJS.enc.Utf8);
+      return decrypted || '[encrypted message unavailable]';
+    } catch {
+      return '[encrypted message unavailable]';
     }
   }
 
@@ -186,7 +208,11 @@ class UserService {
       'SELECT role,content,created_at as timestamp FROM messages WHERE telegram_id=$1 ORDER BY created_at DESC LIMIT 50',
       [telegramId]
     );
-    return rows.reverse();
+
+    return rows.reverse().map((row) => ({
+      ...row,
+      content: this._decryptMessage(row.content),
+    }));
   }
 
   async addMessage(telegramId, role, content, model, provider) {
@@ -197,9 +223,11 @@ class UserService {
       return session;
     }
 
+    const storedContent = this._encryptMessage(content);
+
     await pool.query(
       'INSERT INTO messages(telegram_id,role,content,model,provider) VALUES($1,$2,$3,$4,$5)',
-      [telegramId, role, content, model || null, provider || null]
+      [telegramId, role, storedContent, model || null, provider || null]
     );
   }
 
