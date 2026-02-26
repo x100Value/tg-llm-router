@@ -6,6 +6,9 @@ const path = require('path');
 const logger = require('./middleware/logger');
 const rateLimiter = require('./middleware/rateLimiter');
 const antiSpam = require('./middleware/antiSpam');
+const freeLimit = require("./middleware/freeLimit");
+const statsRoutes = require("./routes/stats");
+const personasRoutes = require("./routes/personas");
 const validateTelegram = require('./middleware/validateTelegram');
 const llmRouter = require('./router/llmRouter');
 const userService = require('./services/userService');
@@ -17,6 +20,8 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
 app.use(express.json());
 app.use(logger);
+app.use(statsRoutes);
+app.use(personasRoutes);
 
 app.get('/api/health', async (req, res) => {
   res.json({ status: 'ok', ...(await userService.stats()), uptime: process.uptime() });
@@ -32,7 +37,7 @@ app.get('/api/models', async (req, res) => {
 });
 
 // Regular chat
-app.post('/api/chat', validateTelegram, rateLimiter, antiSpam, async (req, res) => {
+app.post('/api/chat', validateTelegram, rateLimiter, antiSpam, freeLimit, async (req, res) => {
   try {
     const { userId, model, message } = req.body;
     if (!userId || !message) return res.status(400).json({ error: 'userId and message required' });
@@ -48,7 +53,7 @@ app.post('/api/chat', validateTelegram, rateLimiter, antiSpam, async (req, res) 
 });
 
 // SSE streaming chat
-app.post('/api/chat/stream', validateTelegram, rateLimiter, antiSpam, async (req, res) => {
+app.post('/api/chat/stream', validateTelegram, rateLimiter, antiSpam, freeLimit, async (req, res) => {
   try {
     const { userId, model, message } = req.body;
     if (!userId || !message) return res.status(400).json({ error: 'userId and message required' });
