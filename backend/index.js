@@ -16,9 +16,11 @@ const requireTelegramUserMatch = require('./middleware/requireTelegramUserMatch'
 const statsRoutes = require('./routes/stats');
 const personasRoutes = require('./routes/personas');
 const modesRoutes = require('./routes/modes');
+const billingRoutes = require('./routes/billing');
 
 const llmRouter = require('./router/llmRouter');
 const userService = require('./services/userService');
+const billingService = require('./services/billingService');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -31,6 +33,7 @@ app.use(logger);
 app.use(statsRoutes);
 app.use(personasRoutes);
 app.use(modesRoutes);
+app.use(billingRoutes);
 
 function getIdempotencyKey(req) {
   const fromHeader = req.headers['x-idempotency-key'];
@@ -302,6 +305,7 @@ app.get('*', (req, res) => {
 
 (async () => {
   await userService.init();
+  await billingService.init();
   app.listen(PORT, () => {
     console.log(`\nTG-LLM on :${PORT} | DB: ${userService.fallback ? 'memory' : 'postgresql'}\n`);
   });
