@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const alertService = require('../services/alertService');
 
 const GLOBAL_DAILY_REQUEST_CAP = parseInt(process.env.GLOBAL_DAILY_REQUEST_CAP || '0', 10);
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -16,6 +17,8 @@ async function globalBudgetGuard(req, res, next) {
     );
 
     const total = rows[0]?.total || 0;
+    void alertService.notifyBudgetUsage(total, GLOBAL_DAILY_REQUEST_CAP);
+
     if (total >= GLOBAL_DAILY_REQUEST_CAP) {
       return res.status(429).json({
         error: 'Global daily request cap reached',
@@ -25,6 +28,7 @@ async function globalBudgetGuard(req, res, next) {
 
     return next();
   } catch {
+    void alertService.notifyGuardUnavailable('global-budget');
     return res.status(503).json({
       error: 'Budget guard temporarily unavailable',
       code: 'BUDGET_GUARD_UNAVAILABLE',

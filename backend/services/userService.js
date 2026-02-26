@@ -2,6 +2,7 @@ const { Pool } = require('pg');
 const CryptoJS = require('crypto-js');
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'default-dev-key-change-in-prod!!';
+const PER_USER_DAILY_REQUEST_CAP = parseInt(process.env.PER_USER_DAILY_REQUEST_CAP || '0', 10);
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 class UserService {
@@ -17,7 +18,6 @@ class UserService {
     }
   }
 
-  // --- Users ---
   async getOrCreate(telegramId, lang = 'en') {
     if (this.fallback) {
       if (!this.users.has(telegramId)) {
@@ -52,9 +52,25 @@ class UserService {
     return { ...user, settings: merged };
   }
 
-  // --- Billing / Limits ---
   async reserveRequest(telegramId) {
     if (this.fallback) return { type: 'fallback', field: null, remaining: null };
+
+    if (Number.isFinite(PER_USER_DAILY_REQUEST_CAP) && PER_USER_DAILY_REQUEST_CAP > 0) {
+      const usage = await pool.query(
+        `SELECT COUNT(*)::int AS total
+         FROM transactions
+         WHERE telegram_id=$1
+           AND created_at >= date_trunc('day', NOW())`,
+        [telegramId]
+      );
+
+      const total = usage.rows[0]?.total || 0;
+      if (total >= PER_USER_DAILY_REQUEST_CAP) {
+        const err = new Error('Per-user daily request cap reached. Try again tomorrow.');
+        err.code = 'USER_DAILY_CAP_REACHED';
+        throw err;
+      }
+    }
 
     await pool.query('INSERT INTO balances(telegram_id) VALUES($1) ON CONFLICT DO NOTHING', [telegramId]);
 
@@ -103,6 +119,7 @@ class UserService {
 
   async finalizeRequest(telegramId, reservation, meta = {}) {
     if (this.fallback || !reservation || !reservation.field) return;
+
     try {
       await pool.query(
         'INSERT INTO transactions(telegram_id, amount, type, meta) VALUES($1,$2,$3,$4)',
@@ -113,7 +130,6 @@ class UserService {
     }
   }
 
-  // --- BYOK ---
   async setByokKey(telegramId, provider, apiKey) {
     const encrypted = CryptoJS.AES.encrypt(apiKey, ENCRYPTION_KEY).toString();
     if (this.fallback) {
@@ -160,7 +176,6 @@ class UserService {
     return { success: true };
   }
 
-  // --- Sessions ---
   async getSession(telegramId) {
     if (this.fallback) {
       if (!this.sessions.has(telegramId)) this.sessions.set(telegramId, []);

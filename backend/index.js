@@ -44,6 +44,12 @@ async function reserveQuotaOrReject(userId, res) {
       res.status(402).json({ error: err.message, limit: true, remaining: 0 });
       return null;
     }
+
+    if (err && err.code === 'USER_DAILY_CAP_REACHED') {
+      res.status(429).json({ error: err.message, limit: true, code: err.code });
+      return null;
+    }
+
     throw err;
   }
 }

@@ -1,5 +1,7 @@
 const openrouter = require('../providers/openrouter');
 const huggingface = require('../providers/huggingface');
+const alertService = require('../services/alertService');
+
 const providers = { openrouter, huggingface };
 
 class LLMRouter {
@@ -10,71 +12,113 @@ class LLMRouter {
     this.lastRefresh = 0;
   }
 
-  _parseModel(id) { const [p,...r] = id.split(':'); return { provider: p, model: r.join(':') }; }
-  _getProvider(n) { const p = providers[n]; if (!p) throw new Error(`Unknown provider: ${n}`); return p; }
+  _parseModel(id) {
+    const [provider, ...rest] = id.split(':');
+    return { provider, model: rest.join(':') };
+  }
+
+  _getProvider(name) {
+    const provider = providers[name];
+    if (!provider) throw new Error(`Unknown provider: ${name}`);
+    return provider;
+  }
 
   async refreshFreeModels() {
-    if (Date.now() - this.lastRefresh < 10 * 60 * 1000) return; // cache 10 min
+    if (Date.now() - this.lastRefresh < 10 * 60 * 1000) return;
+
     try {
       const models = await openrouter.listModels();
-      this.freeModels = models.filter(m => m.status === 'available').map(m => m.id);
+      this.freeModels = models.filter((m) => m.status === 'available').map((m) => m.id);
       if (this.freeModels.length) {
         this.defaultModel = this.freeModels[0];
         this.fallbackModel = this.freeModels[1] || this.freeModels[0];
         console.log(`[Router] Refreshed ${this.freeModels.length} free models. Default: ${this.defaultModel}`);
       }
       this.lastRefresh = Date.now();
-    } catch (e) { console.warn('[Router] Refresh failed:', e.message); }
+    } catch (err) {
+      console.warn('[Router] Refresh failed:', err.message);
+    }
   }
 
   async chat(modelId, messages, byokKeys = {}) {
     await this.refreshFreeModels();
+
     const target = modelId || this.defaultModel;
     const { provider } = this._parseModel(target);
+
     try {
-      const p = this._getProvider(provider);
-      const result = await p.chat(target, messages, byokKeys[provider] || null);
+      const primary = this._getProvider(provider);
+      const result = await primary.chat(target, messages, byokKeys[provider] || null);
       return { ...result, fallback: false };
     } catch (err) {
       console.warn(`[Router] Primary failed: ${err.message}`);
+      void alertService.notifyProviderFailure('primary', provider, target, err.message);
     }
-    // Try fallback
-    const fb = this.fallbackModel;
-    if (target !== fb) {
+
+    const fallback = this.fallbackModel;
+    if (target !== fallback) {
       try {
-        const { provider: fp } = this._parseModel(fb);
-        const result = await this._getProvider(fp).chat(fb, messages, byokKeys[fp] || null);
+        const { provider: fp } = this._parseModel(fallback);
+        const result = await this._getProvider(fp).chat(fallback, messages, byokKeys[fp] || null);
         return { ...result, fallback: true };
-      } catch (e2) { console.error(`[Router] Fallback failed: ${e2.message}`); }
+      } catch (err) {
+        console.error(`[Router] Fallback failed: ${err.message}`);
+        const { provider: fp } = this._parseModel(fallback);
+        void alertService.notifyProviderFailure('fallback', fp, fallback, err.message);
+      }
     }
-    // Try any available free model
-    for (const mid of this.freeModels) {
-      if (mid === target || mid === fb) continue;
+
+    for (const model of this.freeModels) {
+      if (model === target || model === fallback) continue;
       try {
-        const { provider: ap } = this._parseModel(mid);
-        const result = await this._getProvider(ap).chat(mid, messages, byokKeys[ap] || null);
+        const { provider: p } = this._parseModel(model);
+        const result = await this._getProvider(p).chat(model, messages, byokKeys[p] || null);
         return { ...result, fallback: true };
-      } catch {}
+      } catch {
+        // continue trying other models
+      }
     }
+
+    void alertService.notifyProviderFailure('all_failed', 'router', target, 'All LLM providers failed');
     throw new Error('All LLM providers failed.');
   }
 
   async *chatStream(modelId, messages, byokKeys = {}) {
     await this.refreshFreeModels();
+
     const target = modelId || this.defaultModel;
     const { provider } = this._parseModel(target);
     const p = this._getProvider(provider);
-    if (!p.chatStream) { const r = await this.chat(modelId, messages, byokKeys); yield r.content; return; }
-    yield* p.chatStream(target, messages, byokKeys[provider] || null);
+
+    try {
+      if (!p.chatStream) {
+        const result = await this.chat(modelId, messages, byokKeys);
+        yield result.content;
+        return;
+      }
+
+      yield* p.chatStream(target, messages, byokKeys[provider] || null);
+    } catch (err) {
+      void alertService.notifyProviderFailure('stream', provider, target, err.message);
+      throw err;
+    }
   }
 
   async listAllModels(byokKeys = {}) {
     await this.refreshFreeModels();
+
     const results = [];
     for (const [name, provider] of Object.entries(providers)) {
-      try { const models = await provider.listModels(byokKeys[name]); results.push(...models); } catch {}
+      try {
+        const models = await provider.listModels(byokKeys[name]);
+        results.push(...models);
+      } catch {
+        // ignore provider list failure
+      }
     }
+
     return results;
   }
 }
+
 module.exports = new LLMRouter();
