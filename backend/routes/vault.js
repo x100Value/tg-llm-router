@@ -45,7 +45,7 @@ function validateCategoryParams(req, res) {
   )`).catch(() => {});
 })();
 
-router.post('/api/vault/:telegramId/:category', async (req, res) => {
+router.post('/:telegramId/:category', async (req, res) => {
   try {
     if (!validateCategoryParams(req, res)) return;
 
@@ -69,7 +69,7 @@ router.post('/api/vault/:telegramId/:category', async (req, res) => {
   }
 });
 
-router.get('/api/vault/:telegramId/:category', async (req, res) => {
+router.get('/:telegramId/:category', async (req, res) => {
   try {
     if (!validateCategoryParams(req, res)) return;
     const { telegramId, category } = req.params;
@@ -85,7 +85,7 @@ router.get('/api/vault/:telegramId/:category', async (req, res) => {
   }
 });
 
-router.get('/api/vault/:telegramId', async (req, res) => {
+router.get('/:telegramId', async (req, res) => {
   try {
     if (!validateBaseParams(req, res)) return;
     const { telegramId } = req.params;
@@ -101,7 +101,7 @@ router.get('/api/vault/:telegramId', async (req, res) => {
   }
 });
 
-router.delete('/api/vault/:telegramId/:category', async (req, res) => {
+router.delete('/:telegramId/:category', async (req, res) => {
   try {
     if (!validateCategoryParams(req, res)) return;
     const { telegramId, category } = req.params;
