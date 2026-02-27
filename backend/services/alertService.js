@@ -102,6 +102,16 @@ class AlertService {
     const msg = `Stale pending payments detected | count=${pendingCount} | threshold=${ageThreshold}m | oldest=${oldest}m`;
     return this.send('billing-pending-stale', msg, PENDING_PAYMENT_ALERT_COOLDOWN_SEC);
   }
+
+  async notifyPendingPaymentsTimedOut(count, minAgeMinutes, trigger = 'interval') {
+    const affected = Number(count || 0);
+    if (!Number.isFinite(affected) || affected <= 0) return false;
+
+    const ageThreshold = Math.max(1, Math.floor(Number(minAgeMinutes || 1)));
+    const src = String(trigger || 'interval').slice(0, 40);
+    const msg = `Pending payments auto-timeout | trigger=${src} | affected=${affected} | threshold=${ageThreshold}m`;
+    return this.send('billing-pending-timeout', msg, PENDING_PAYMENT_ALERT_COOLDOWN_SEC);
+  }
 }
 
 module.exports = new AlertService();

@@ -695,6 +695,217 @@ class BillingService {
     };
   }
 
+  async listPendingPayments(options = {}) {
+    const minAgeRaw = parseInt(options?.minAgeMinutes, 10);
+    const minAgeMinutes =
+      Number.isFinite(minAgeRaw) && minAgeRaw >= 0
+        ? Math.min(minAgeRaw, 60 * 24 * 365)
+        : 15;
+
+    const limitRaw = parseInt(options?.limit, 10);
+    const limit =
+      Number.isFinite(limitRaw) && limitRaw > 0
+        ? Math.min(limitRaw, 500)
+        : 100;
+
+    const { rows } = await pool.query(
+      `SELECT
+         id,
+         telegram_id,
+         provider,
+         external_payment_id,
+         plan_code,
+         amount,
+         currency,
+         status,
+         created_at,
+         updated_at,
+         FLOOR(EXTRACT(EPOCH FROM (NOW() - created_at)) / 60)::int AS age_minutes
+       FROM payments
+       WHERE status='pending'
+         AND created_at <= NOW() - ($1 * INTERVAL '1 minute')
+       ORDER BY created_at ASC
+       LIMIT $2`,
+      [minAgeMinutes, limit]
+    );
+
+    return {
+      minAgeMinutes,
+      limit,
+      count: rows.length,
+      payments: rows,
+    };
+  }
+
+  async resolvePendingPayment(paymentIdInput, actionInput, options = {}) {
+    const paymentId = parseInt(paymentIdInput, 10);
+    if (!Number.isFinite(paymentId) || paymentId <= 0) {
+      const err = new Error('Invalid paymentId');
+      err.code = 'INVALID_PAYMENT_ID';
+      throw err;
+    }
+
+    const action = String(actionInput || '').trim().toLowerCase();
+    if (action !== 'failed' && action !== 'succeeded') {
+      const err = new Error('Invalid action, expected failed|succeeded');
+      err.code = 'INVALID_ACTION';
+      throw err;
+    }
+
+    const { rows } = await pool.query(
+      `SELECT
+         id, telegram_id, provider, external_payment_id, plan_code, amount, currency, status, payload, created_at, updated_at
+       FROM payments
+       WHERE id=$1
+       LIMIT 1`,
+      [paymentId]
+    );
+    const payment = rows[0];
+    if (!payment) {
+      const err = new Error('Payment not found');
+      err.code = 'PAYMENT_NOT_FOUND';
+      throw err;
+    }
+
+    if (payment.status !== 'pending') {
+      if (payment.status === action) {
+        return {
+          ok: true,
+          alreadyResolved: true,
+          action,
+          payment,
+        };
+      }
+      const err = new Error(`Payment is not pending (status=${payment.status})`);
+      err.code = 'PAYMENT_NOT_PENDING';
+      throw err;
+    }
+
+    const reason = String(options?.reason || 'admin_resolve').slice(0, 160);
+    const actor = String(options?.actor || 'admin_api').slice(0, 64);
+    const resolvedAt = new Date().toISOString();
+
+    if (action === 'failed') {
+      const resolutionMeta = {
+        adminResolution: {
+          action,
+          reason,
+          actor,
+          resolvedAt,
+        },
+      };
+
+      const updated = await pool.query(
+        `UPDATE payments
+         SET status='failed',
+             payload=COALESCE(payload, '{}'::jsonb) || $2::jsonb,
+             updated_at=NOW()
+         WHERE id=$1
+         RETURNING id, telegram_id, provider, external_payment_id, plan_code, amount, currency, status, payload, created_at, updated_at`,
+        [paymentId, JSON.stringify(resolutionMeta)]
+      );
+
+      return {
+        ok: true,
+        alreadyResolved: false,
+        action,
+        payment: updated.rows[0],
+      };
+    }
+
+    const existingPayload = payment.payload && typeof payment.payload === 'object'
+      ? payment.payload
+      : {};
+
+    const result = await this.processWebhook({
+      provider: payment.provider,
+      externalPaymentId: payment.external_payment_id,
+      telegramId: payment.telegram_id,
+      planCode: payment.plan_code,
+      amount: payment.amount,
+      currency: payment.currency,
+      status: 'succeeded',
+      metadata: {
+        ...existingPayload,
+        adminResolution: {
+          action,
+          reason,
+          actor,
+          resolvedAt,
+        },
+      },
+    });
+
+    const refreshed = await pool.query(
+      `SELECT
+         id, telegram_id, provider, external_payment_id, plan_code, amount, currency, status, payload, created_at, updated_at
+       FROM payments
+       WHERE id=$1
+       LIMIT 1`,
+      [paymentId]
+    );
+
+    return {
+      ok: true,
+      alreadyResolved: false,
+      action,
+      payment: refreshed.rows[0] || payment,
+      subscriptionApplied: Boolean(result?.subscriptionApplied),
+    };
+  }
+
+  async timeoutPendingPayments(options = {}) {
+    const minAgeRaw = parseInt(options?.minAgeMinutes, 10);
+    const minAgeMinutes =
+      Number.isFinite(minAgeRaw) && minAgeRaw > 0
+        ? Math.min(minAgeRaw, 60 * 24 * 365)
+        : 120;
+
+    const limitRaw = parseInt(options?.limit, 10);
+    const limit =
+      Number.isFinite(limitRaw) && limitRaw > 0
+        ? Math.min(limitRaw, 1000)
+        : 200;
+
+    const reason = String(options?.reason || 'auto_timeout').slice(0, 120);
+    const payloadPatch = {
+      timeoutResolution: {
+        reason,
+        minAgeMinutes,
+        resolvedAt: new Date().toISOString(),
+      },
+    };
+
+    const { rows } = await pool.query(
+      `WITH target AS (
+         SELECT id
+         FROM payments
+         WHERE status='pending'
+           AND created_at <= NOW() - ($1 * INTERVAL '1 minute')
+         ORDER BY created_at ASC
+         LIMIT $2
+         FOR UPDATE SKIP LOCKED
+       )
+       UPDATE payments p
+       SET status='failed',
+           payload=COALESCE(p.payload, '{}'::jsonb) || $3::jsonb,
+           updated_at=NOW()
+       FROM target t
+       WHERE p.id=t.id
+       RETURNING p.id, p.telegram_id, p.external_payment_id, p.provider, p.plan_code, p.created_at, p.updated_at`,
+      [minAgeMinutes, limit, JSON.stringify(payloadPatch)]
+    );
+
+    return {
+      ok: true,
+      minAgeMinutes,
+      limit,
+      affected: rows.length,
+      payments: rows,
+      ranAt: new Date().toISOString(),
+    };
+  }
+
   async runSubscriptionMaintenance(options = {}) {
     const dryRun = options?.dryRun === true;
     const reason = String(options?.reason || 'scheduler').slice(0, 64);

@@ -52,12 +52,41 @@ Tracked events:
 - `successful_payment`
 
 ## Pending Payments Monitoring
+List stale pending payments:
+```bash
+curl -sS \
+  -H "X-Billing-Admin-Token: $BILLING_ADMIN_TOKEN" \
+  "http://127.0.0.1:3001/api/billing/admin/payments/pending?minAgeMinutes=15&limit=100"
+```
+
+Resolve one payment manually (`failed` or `succeeded`):
+```bash
+curl -sS -X POST \
+  -H "X-Billing-Admin-Token: $BILLING_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"failed","reason":"manual_review"}' \
+  "http://127.0.0.1:3001/api/billing/admin/payments/123/resolve"
+```
+
+Run timeout batch manually:
+```bash
+curl -sS -X POST \
+  -H "X-Billing-Admin-Token: $BILLING_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"minAgeMinutes":120,"limit":200,"reason":"manual_timeout_run"}' \
+  "http://127.0.0.1:3001/api/billing/admin/payments/pending/timeout/run"
+```
+
 Key env variables:
 - `PENDING_PAYMENT_ALERT_ENABLED`
 - `PENDING_PAYMENT_ALERT_INTERVAL_SEC`
 - `PENDING_PAYMENT_ALERT_MIN_AGE_MIN`
 - `PENDING_PAYMENT_ALERT_MIN_COUNT`
 - `PENDING_PAYMENT_ALERT_COOLDOWN_SEC`
+- `PENDING_PAYMENT_TIMEOUT_ENABLED`
+- `PENDING_PAYMENT_TIMEOUT_INTERVAL_SEC`
+- `PENDING_PAYMENT_TIMEOUT_MAX_AGE_MIN`
+- `PENDING_PAYMENT_TIMEOUT_BATCH_LIMIT`
 
 Webhook alert cooldown:
 - `WEBHOOK_ALERT_COOLDOWN_SEC`
@@ -84,4 +113,3 @@ git checkout main
 git pull --ff-only origin main
 systemctl restart tg-llm
 ```
-

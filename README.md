@@ -104,6 +104,9 @@ docker-compose up --build
 | POST | /api/telegram/webhook | Telegram payment webhook |
 | POST | /api/billing/admin/subscription/maintenance/run | Manual maintenance |
 | GET | /api/billing/admin/analytics/funnel | Funnel analytics report |
+| GET | /api/billing/admin/payments/pending | List stale pending payments |
+| POST | /api/billing/admin/payments/pending/timeout/run | Manual pending timeout batch |
+| POST | /api/billing/admin/payments/:paymentId/resolve | Resolve one pending payment |
 
 ## Stack
 - **Frontend:** React 18 + Vite + Tailwind CSS + Telegram WebApp SDK + TON Connect

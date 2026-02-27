@@ -33,11 +33,17 @@ const PENDING_PAYMENT_ALERT_ENABLED = (process.env.PENDING_PAYMENT_ALERT_ENABLED
 const PENDING_PAYMENT_ALERT_INTERVAL_SEC = parseInt(process.env.PENDING_PAYMENT_ALERT_INTERVAL_SEC || '300', 10);
 const PENDING_PAYMENT_ALERT_MIN_AGE_MIN = parseInt(process.env.PENDING_PAYMENT_ALERT_MIN_AGE_MIN || '15', 10);
 const PENDING_PAYMENT_ALERT_MIN_COUNT = parseInt(process.env.PENDING_PAYMENT_ALERT_MIN_COUNT || '1', 10);
+const PENDING_PAYMENT_TIMEOUT_ENABLED = (process.env.PENDING_PAYMENT_TIMEOUT_ENABLED || 'true').toLowerCase() !== 'false';
+const PENDING_PAYMENT_TIMEOUT_INTERVAL_SEC = parseInt(process.env.PENDING_PAYMENT_TIMEOUT_INTERVAL_SEC || '900', 10);
+const PENDING_PAYMENT_TIMEOUT_MAX_AGE_MIN = parseInt(process.env.PENDING_PAYMENT_TIMEOUT_MAX_AGE_MIN || '120', 10);
+const PENDING_PAYMENT_TIMEOUT_BATCH_LIMIT = parseInt(process.env.PENDING_PAYMENT_TIMEOUT_BATCH_LIMIT || '200', 10);
 
 let subscriptionMaintenanceRunning = false;
 let subscriptionMaintenanceTimer = null;
 let pendingPaymentAlertRunning = false;
 let pendingPaymentAlertTimer = null;
+let pendingPaymentTimeoutRunning = false;
+let pendingPaymentTimeoutTimer = null;
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
@@ -199,6 +205,61 @@ function startPendingPaymentMonitor() {
   }
 
   console.log(`[BillingPendingMonitor] enabled interval=${intervalSec}s age=${PENDING_PAYMENT_ALERT_MIN_AGE_MIN}m`);
+}
+
+async function runPendingPaymentTimeoutTick(trigger) {
+  if (!PENDING_PAYMENT_TIMEOUT_ENABLED) return;
+  if (pendingPaymentTimeoutRunning) return;
+
+  pendingPaymentTimeoutRunning = true;
+  try {
+    const result = await billingService.timeoutPendingPayments({
+      minAgeMinutes: PENDING_PAYMENT_TIMEOUT_MAX_AGE_MIN,
+      limit: PENDING_PAYMENT_TIMEOUT_BATCH_LIMIT,
+      reason: `scheduler_${trigger || 'interval'}`,
+    });
+
+    if (result.affected > 0) {
+      console.log(
+        `[BillingPendingTimeout] trigger=${trigger || 'interval'} affected=${result.affected} threshold=${result.minAgeMinutes}m batch=${result.limit}`
+      );
+      await alertService.notifyPendingPaymentsTimedOut(
+        result.affected,
+        result.minAgeMinutes,
+        trigger || 'interval'
+      );
+    }
+  } catch (err) {
+    console.error('[BillingPendingTimeout] failed:', err.message);
+  } finally {
+    pendingPaymentTimeoutRunning = false;
+  }
+}
+
+function startPendingPaymentTimeout() {
+  if (!PENDING_PAYMENT_TIMEOUT_ENABLED) {
+    console.log('[BillingPendingTimeout] disabled');
+    return;
+  }
+
+  const intervalSec =
+    Number.isFinite(PENDING_PAYMENT_TIMEOUT_INTERVAL_SEC) && PENDING_PAYMENT_TIMEOUT_INTERVAL_SEC > 0
+      ? PENDING_PAYMENT_TIMEOUT_INTERVAL_SEC
+      : 900;
+
+  runPendingPaymentTimeoutTick('startup').catch(() => {});
+
+  pendingPaymentTimeoutTimer = setInterval(() => {
+    runPendingPaymentTimeoutTick('interval').catch(() => {});
+  }, intervalSec * 1000);
+
+  if (typeof pendingPaymentTimeoutTimer.unref === 'function') {
+    pendingPaymentTimeoutTimer.unref();
+  }
+
+  console.log(
+    `[BillingPendingTimeout] enabled interval=${intervalSec}s age=${PENDING_PAYMENT_TIMEOUT_MAX_AGE_MIN}m batch=${PENDING_PAYMENT_TIMEOUT_BATCH_LIMIT}`
+  );
 }
 
 app.get('/api/health', async (req, res) => {
@@ -412,6 +473,7 @@ app.get('*', (req, res) => {
   await billingService.init();
   startSubscriptionMaintenance();
   startPendingPaymentMonitor();
+  startPendingPaymentTimeout();
   app.listen(PORT, () => {
     console.log(`\nTG-LLM on :${PORT} | DB: ${userService.fallback ? 'memory' : 'postgresql'}\n`);
   });

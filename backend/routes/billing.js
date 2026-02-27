@@ -362,6 +362,66 @@ router.get('/api/billing/admin/analytics/funnel', requireBillingAdmin, rateLimit
   }
 });
 
+router.get('/api/billing/admin/payments/pending', requireBillingAdmin, rateLimiter, async (req, res) => {
+  try {
+    const minAgeMinutes = parseInt(req.query?.minAgeMinutes, 10);
+    const limit = parseInt(req.query?.limit, 10);
+    const result = await billingService.listPendingPayments({ minAgeMinutes, limit });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/api/billing/admin/payments/pending/timeout/run', requireBillingAdmin, rateLimiter, async (req, res) => {
+  try {
+    const minAgeMinutes = parseInt(req.body?.minAgeMinutes, 10);
+    const limit = parseInt(req.body?.limit, 10);
+    const reason = String(req.body?.reason || 'admin_timeout_run').slice(0, 120);
+    const result = await billingService.timeoutPendingPayments({
+      minAgeMinutes,
+      limit,
+      reason,
+    });
+
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/api/billing/admin/payments/:paymentId/resolve', requireBillingAdmin, rateLimiter, async (req, res) => {
+  try {
+    const paymentId = req.params.paymentId;
+    const action = String(req.body?.action || '').trim().toLowerCase();
+    const reason = String(req.body?.reason || 'admin_manual_resolve').slice(0, 160);
+
+    const result = await billingService.resolvePendingPayment(paymentId, action, {
+      reason,
+      actor: 'admin_api',
+    });
+
+    res.json({ success: true, ...result });
+  } catch (err) {
+    if (err.code === 'INVALID_PAYMENT_ID' || err.code === 'INVALID_ACTION') {
+      return res.status(400).json({ error: err.message, code: err.code });
+    }
+    if (err.code === 'PAYMENT_NOT_FOUND') {
+      return res.status(404).json({ error: err.message, code: err.code });
+    }
+    if (err.code === 'PAYMENT_NOT_PENDING') {
+      return res.status(409).json({ error: err.message, code: err.code });
+    }
+    if (err.code === 'PLAN_NOT_FOUND') {
+      return res.status(404).json({ error: err.message, code: err.code });
+    }
+    if (err.code === 'INVALID_WEBHOOK_PAYLOAD') {
+      return res.status(400).json({ error: err.message, code: err.code });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/api/billing/webhook', async (req, res) => {
   try {
     if (BILLING_WEBHOOK_SECRET) {
