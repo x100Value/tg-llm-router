@@ -21,6 +21,9 @@ const API_ENDPOINTS = [
 ];
 
 export default function DevPanel({ t, userId }) {
+  const isRu = t?._lang === 'ru';
+  const tr = (ru, en) => (isRu ? ru : en);
+
   const [tab, setTab] = useState('keys');
   const [keys, setKeys] = useState([]);
   const [provider, setProvider] = useState('openrouter');
@@ -68,7 +71,7 @@ export default function DevPanel({ t, userId }) {
   useEffect(() => { if (tab === 'usage') loadUsage(); }, [tab]);
   const requireAdminToken = () => {
     const token = String(adminToken || '').trim();
-    if (!token) throw new Error('Set Billing admin token first');
+    if (!token) throw new Error(tr('Сначала укажите токен Billing Admin', 'Set Billing admin token first'));
     return token;
   };
   const clearBillingStatus = () => {
@@ -83,7 +86,7 @@ export default function DevPanel({ t, userId }) {
     } catch {
       // ignore storage issues
     }
-    setBillingInfo(token ? 'Admin token saved locally' : 'Admin token cleared');
+    setBillingInfo(token ? tr('Токен сохранен локально', 'Admin token saved locally') : tr('Токен очищен', 'Admin token cleared'));
     setBillingError('');
   };
   const loadFunnel = async () => {
@@ -93,9 +96,9 @@ export default function DevPanel({ t, userId }) {
       const token = requireAdminToken();
       const data = await api.billingAdmin.funnel(funnelHours, token);
       setFunnel(data);
-      setBillingInfo('Funnel loaded');
+      setBillingInfo(tr('Воронка загружена', 'Funnel loaded'));
     } catch (e) {
-      setBillingError(String(e?.message || 'Failed to load funnel'));
+      setBillingError(String(e?.message || tr('Не удалось загрузить воронку', 'Failed to load funnel')));
     } finally {
       setBillingBusy(false);
     }
@@ -107,9 +110,9 @@ export default function DevPanel({ t, userId }) {
       const token = requireAdminToken();
       const data = await api.billingAdmin.pending(pendingMinAge, pendingLimit, token);
       setPending(Array.isArray(data?.payments) ? data.payments : []);
-      setBillingInfo(`Pending loaded: ${data?.count || 0}`);
+      setBillingInfo(`${tr('Ожидающие загружены', 'Pending loaded')}: ${data?.count || 0}`);
     } catch (e) {
-      setBillingError(String(e?.message || 'Failed to load pending'));
+      setBillingError(String(e?.message || tr('Не удалось загрузить ожидающие', 'Failed to load pending')));
     } finally {
       setBillingBusy(false);
     }
@@ -124,10 +127,10 @@ export default function DevPanel({ t, userId }) {
         limit: timeoutLimit,
         reason: 'dev_panel_timeout_run',
       }, token);
-      setBillingInfo(`Timeout run complete, affected=${result?.affected || 0}`);
+      setBillingInfo(`${tr('Таймаут-обработка завершена, затронуто', 'Timeout run complete, affected')}=${result?.affected || 0}`);
       await loadPending();
     } catch (e) {
-      setBillingError(String(e?.message || 'Timeout run failed'));
+      setBillingError(String(e?.message || tr('Ошибка запуска таймаута', 'Timeout run failed')));
     } finally {
       setBillingBusy(false);
     }
@@ -138,11 +141,11 @@ export default function DevPanel({ t, userId }) {
     try {
       const token = requireAdminToken();
       await api.billingAdmin.resolvePayment(paymentId, action, resolveReason || 'dev_panel_resolve', token);
-      setBillingInfo(`Payment ${paymentId} resolved as ${action}`);
+      setBillingInfo(`${tr('Платеж', 'Payment')} ${paymentId} ${tr('обновлен как', 'resolved as')} ${action}`);
       await loadPending();
       await loadFunnel();
     } catch (e) {
-      setBillingError(String(e?.message || 'Resolve failed'));
+      setBillingError(String(e?.message || tr('Не удалось обновить статус', 'Resolve failed')));
     } finally {
       setBillingBusy(false);
     }
@@ -153,9 +156,11 @@ export default function DevPanel({ t, userId }) {
     try {
       const token = requireAdminToken();
       const result = await api.billingAdmin.maintenanceRun(dryRun, token);
-      setBillingInfo(`Maintenance ${dryRun ? 'dry-run' : 'run'} complete: finalized=${result?.finalized || 0}, moved=${result?.movedToGrace || 0}`);
+      setBillingInfo(
+        `${tr('Операция обслуживания', 'Maintenance')} ${dryRun ? tr('dry-run', 'dry-run') : tr('run', 'run')} ${tr('завершена', 'complete')}: finalized=${result?.finalized || 0}, moved=${result?.movedToGrace || 0}`,
+      );
     } catch (e) {
-      setBillingError(String(e?.message || 'Maintenance failed'));
+      setBillingError(String(e?.message || tr('Ошибка maintenance', 'Maintenance failed')));
     } finally {
       setBillingBusy(false);
     }
@@ -167,7 +172,14 @@ export default function DevPanel({ t, userId }) {
     loadPending().catch(() => {});
   }, [tab]);
 
-  const tabMeta = { keys: { icon: '🔑', label: t.apiKeys || 'Keys' }, docs: { icon: '📖', label: 'API' }, playground: { icon: '🧪', label: 'Test' }, usage: { icon: '📊', label: 'Usage' }, billing: { icon: '🛡️', label: 'Billing' }, terminal: { icon: '⬛', label: 'Terminal' } };
+  const tabMeta = {
+    keys: { icon: '🔑', label: t.apiKeys || tr('Ключи', 'Keys') },
+    docs: { icon: '📖', label: 'API' },
+    playground: { icon: '🧪', label: tr('Тест', 'Test') },
+    usage: { icon: '📊', label: tr('Статистика', 'Usage') },
+    billing: { icon: '🛡️', label: tr('Биллинг', 'Billing') },
+    terminal: { icon: '⬛', label: tr('Терминал', 'Terminal') },
+  };
 
   return (
     <div className="flex flex-col h-[calc(100vh-48px)]">
@@ -209,38 +221,38 @@ export default function DevPanel({ t, userId }) {
                 <p className="text-[10px] text-white/20 font-mono mt-1">{ep.d}</p>
               </div>
             ))}</div>
-            <div className="rounded-2xl bg-surface-2 border border-dashed border-white/10 p-4 text-center"><p className="text-xs text-white/25">NPM SDK — Coming soon</p></div>
+            <div className="rounded-2xl bg-surface-2 border border-dashed border-white/10 p-4 text-center"><p className="text-xs text-white/25">{tr('NPM SDK — скоро', 'NPM SDK — Coming soon')}</p></div>
           </div>
         )}
         {tab === 'playground' && (
           <div className="px-4 py-5 space-y-4 animate-fade-in">
-            <div><h3 className="text-sm font-semibold text-white/80">⚡ API Playground</h3></div>
+            <div><h3 className="text-sm font-semibold text-white/80">{tr('⚡ Песочница API', '⚡ API Playground')}</h3></div>
             <select value={pgModel} onChange={e => setPgModel(e.target.value)} className="w-full bg-surface-3 border border-white/5 rounded-xl px-3 py-2 text-sm text-white/60 font-mono focus:outline-none">
               {pgModels.map(m => <option key={m.id} value={m.id} className="bg-surface-1">{m.name}</option>)}
             </select>
-            <textarea value={pgInput} onChange={e => setPgInput(e.target.value)} placeholder="Enter prompt..." rows={3} className="w-full bg-surface-3 border border-white/5 rounded-xl px-3 py-2 text-sm text-white/60 placeholder-white/15 focus:outline-none resize-none" />
-            <button onClick={runPlayground} disabled={pgLoading || !pgInput.trim()} className="w-full py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:opacity-25 text-white text-sm font-medium transition-all">{pgLoading ? '⏳ Running...' : '⚡ Send Request'}</button>
+            <textarea value={pgInput} onChange={e => setPgInput(e.target.value)} placeholder={tr('Введите промпт...', 'Enter prompt...')} rows={3} className="w-full bg-surface-3 border border-white/5 rounded-xl px-3 py-2 text-sm text-white/60 placeholder-white/15 focus:outline-none resize-none" />
+            <button onClick={runPlayground} disabled={pgLoading || !pgInput.trim()} className="w-full py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:opacity-25 text-white text-sm font-medium transition-all">{pgLoading ? tr('⏳ Выполняю...', '⏳ Running...') : tr('⚡ Отправить запрос', '⚡ Send Request')}</button>
             {pgResult && (
               <div className={`rounded-xl p-3 text-sm ${pgResult.ok ? 'bg-emerald-500/10 border border-emerald-500/15' : 'bg-red-500/10 border border-red-500/15'}`}>
-                {pgResult.ok ? (<><p className="text-white/80 text-xs whitespace-pre-wrap">{pgResult.response}</p><div className="flex gap-3 mt-2 text-[10px] text-white/30"><span>📡 {pgResult.provider}</span><span>⏱ {pgResult.ms}ms</span>{pgResult.fallback && <span className="text-amber-400">⚡ fallback</span>}</div></>) : <p className="text-red-300 text-xs">❌ {pgResult.error} ({pgResult.ms}ms)</p>}
+                {pgResult.ok ? (<><p className="text-white/80 text-xs whitespace-pre-wrap">{pgResult.response}</p><div className="flex gap-3 mt-2 text-[10px] text-white/30"><span>📡 {pgResult.provider}</span><span>⏱ {pgResult.ms}ms</span>{pgResult.fallback && <span className="text-amber-400">{tr('⚡ резервная модель', '⚡ fallback')}</span>}</div></>) : <p className="text-red-300 text-xs">❌ {pgResult.error} ({pgResult.ms}ms)</p>}
               </div>
             )}
           </div>
         )}
         {tab === 'usage' && (
           <div className="px-4 py-5 space-y-4 animate-fade-in">
-            <h3 className="text-sm font-semibold text-white/80">📊 Usage</h3>
+            <h3 className="text-sm font-semibold text-white/80">{tr('📊 Статистика', '📊 Usage')}</h3>
             <div className="grid grid-cols-2 gap-2.5">
-              <UCard icon="👤" label="Unique users" value={stats?.unique || 0} color="cyan" />
-              <UCard icon="👁" label="Total visits" value={stats?.total || 0} color="purple" />
-              <UCard icon="💬" label="Sessions" value={health?.activeSessions || 0} color="emerald" />
-              <UCard icon="⏱" label="Uptime" value={health ? Math.floor(health.uptime/3600)+'h' : '-'} color="amber" />
+              <UCard icon="👤" label={tr('Уникальные пользователи', 'Unique users')} value={stats?.unique || 0} color="cyan" />
+              <UCard icon="👁" label={tr('Всего визитов', 'Total visits')} value={stats?.total || 0} color="purple" />
+              <UCard icon="💬" label={tr('Сессии', 'Sessions')} value={health?.activeSessions || 0} color="emerald" />
+              <UCard icon="⏱" label={tr('Аптайм', 'Uptime')} value={health ? Math.floor(health.uptime/3600)+'h' : '-'} color="amber" />
             </div>
             <div className="space-y-2">
-              {['💰 Token costs per model', '📈 Requests/day chart', '🏆 Top models', '⚠️ Error tracking'].map((f,i) => (
+              {[tr('💰 Стоимость токенов по моделям', '💰 Token costs per model'), tr('📈 График запросов/день', '📈 Requests/day chart'), tr('🏆 Топ моделей', '🏆 Top models'), tr('⚠️ Отслеживание ошибок', '⚠️ Error tracking')].map((f,i) => (
                 <div key={i} className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-surface-2 border border-dashed border-white/5">
                   <span className="text-xs text-white/25">{f}</span>
-                  <span className="ml-auto text-[9px] text-white/15 bg-white/5 px-2 py-0.5 rounded-full">Soon</span>
+                  <span className="ml-auto text-[9px] text-white/15 bg-white/5 px-2 py-0.5 rounded-full">{tr('Скоро', 'Soon')}</span>
                 </div>
               ))}
             </div>
@@ -249,35 +261,35 @@ export default function DevPanel({ t, userId }) {
         {tab === 'billing' && (
           <div className="px-4 py-5 space-y-4 animate-fade-in">
             <div>
-              <h3 className="text-sm font-semibold text-white/80">🛡️ Billing Admin</h3>
-              <p className="text-xs text-white/30 mt-1">Pending payments, funnel analytics, and maintenance controls.</p>
+              <h3 className="text-sm font-semibold text-white/80">{tr('🛡️ Админка биллинга', '🛡️ Billing Admin')}</h3>
+              <p className="text-xs text-white/30 mt-1">{tr('Ожидающие платежи, аналитика воронки и служебные операции.', 'Pending payments, funnel analytics, and maintenance controls.')}</p>
             </div>
 
             <div className="rounded-xl bg-surface-2 border border-white/5 p-3 space-y-2">
-              <label className="text-[11px] text-white/35">Billing admin token</label>
+              <label className="text-[11px] text-white/35">{tr('Токен админки биллинга', 'Billing admin token')}</label>
               <div className="flex gap-2">
                 <input
                   type="password"
                   value={adminTokenDraft}
                   onChange={(e) => setAdminTokenDraft(e.target.value)}
-                  placeholder="Paste BILLING_ADMIN_TOKEN"
+                  placeholder={tr('Вставьте BILLING_ADMIN_TOKEN', 'Paste BILLING_ADMIN_TOKEN')}
                   className="flex-1 bg-surface-3 border border-white/5 rounded-lg px-3 py-2 text-xs text-white/70 font-mono placeholder-white/15 focus:outline-none"
                 />
                 <button
                   onClick={saveAdminToken}
                   className="px-3 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-[11px] font-medium text-white"
                 >
-                  Save
+                  {t.save || tr('Сохранить', 'Save')}
                 </button>
               </div>
-              <p className="text-[10px] text-white/25">Stored in localStorage on this device.</p>
+              <p className="text-[10px] text-white/25">{tr('Хранится в localStorage на этом устройстве.', 'Stored in localStorage on this device.')}</p>
             </div>
 
             <div className="grid grid-cols-2 gap-2">
-              <button onClick={loadFunnel} disabled={billingBusy} className="py-2 rounded-lg bg-indigo-600/80 hover:bg-indigo-500 text-[11px] font-medium text-white disabled:opacity-40">Refresh Funnel</button>
-              <button onClick={loadPending} disabled={billingBusy} className="py-2 rounded-lg bg-indigo-600/80 hover:bg-indigo-500 text-[11px] font-medium text-white disabled:opacity-40">Refresh Pending</button>
-              <button onClick={() => runMaintenance(true)} disabled={billingBusy} className="py-2 rounded-lg bg-amber-600/80 hover:bg-amber-500 text-[11px] font-medium text-white disabled:opacity-40">Maintenance Dry-Run</button>
-              <button onClick={() => runMaintenance(false)} disabled={billingBusy} className="py-2 rounded-lg bg-amber-600/80 hover:bg-amber-500 text-[11px] font-medium text-white disabled:opacity-40">Maintenance Run</button>
+              <button onClick={loadFunnel} disabled={billingBusy} className="py-2 rounded-lg bg-indigo-600/80 hover:bg-indigo-500 text-[11px] font-medium text-white disabled:opacity-40">{tr('Обновить воронку', 'Refresh Funnel')}</button>
+              <button onClick={loadPending} disabled={billingBusy} className="py-2 rounded-lg bg-indigo-600/80 hover:bg-indigo-500 text-[11px] font-medium text-white disabled:opacity-40">{tr('Обновить pending', 'Refresh Pending')}</button>
+              <button onClick={() => runMaintenance(true)} disabled={billingBusy} className="py-2 rounded-lg bg-amber-600/80 hover:bg-amber-500 text-[11px] font-medium text-white disabled:opacity-40">{tr('Проверка обслуживания (dry-run)', 'Maintenance Dry-Run')}</button>
+              <button onClick={() => runMaintenance(false)} disabled={billingBusy} className="py-2 rounded-lg bg-amber-600/80 hover:bg-amber-500 text-[11px] font-medium text-white disabled:opacity-40">{tr('Запуск обслуживания', 'Maintenance Run')}</button>
             </div>
 
             {billingError && <p className="text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{billingError}</p>}
@@ -285,7 +297,7 @@ export default function DevPanel({ t, userId }) {
 
             <div className="rounded-xl bg-surface-2 border border-white/5 p-3 space-y-3">
               <div className="flex items-center gap-2">
-                <span className="text-xs text-white/70">Funnel Window (hours)</span>
+                <span className="text-xs text-white/70">{tr('Окно воронки (часы)', 'Funnel Window (hours)')}</span>
                 <input value={funnelHours} onChange={(e) => setFunnelHours(e.target.value)} className="ml-auto w-20 bg-surface-3 border border-white/5 rounded px-2 py-1 text-xs text-white/70 focus:outline-none" />
               </div>
               <div className="grid grid-cols-2 gap-2">
@@ -293,7 +305,7 @@ export default function DevPanel({ t, userId }) {
                   <div key={item.event} className="rounded-lg bg-surface-3 border border-white/5 p-2">
                     <p className="text-[10px] text-white/30">{item.event}</p>
                     <p className="text-sm text-white/80 font-semibold">{item.total}</p>
-                    <p className="text-[10px] text-white/30">users: {item.users}</p>
+                    <p className="text-[10px] text-white/30">{tr('пользователи', 'users')}: {item.users}</p>
                   </div>
                 ))}
               </div>
@@ -310,32 +322,32 @@ export default function DevPanel({ t, userId }) {
             <div className="rounded-xl bg-surface-2 border border-white/5 p-3 space-y-3">
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="text-[10px] text-white/35">Pending min age (min)</label>
+                  <label className="text-[10px] text-white/35">{tr('Мин. возраст pending (мин)', 'Pending min age (min)')}</label>
                   <input value={pendingMinAge} onChange={(e) => setPendingMinAge(e.target.value)} className="mt-1 w-full bg-surface-3 border border-white/5 rounded px-2 py-1.5 text-xs text-white/70 focus:outline-none" />
                 </div>
                 <div>
-                  <label className="text-[10px] text-white/35">Pending limit</label>
+                  <label className="text-[10px] text-white/35">{tr('Лимит pending', 'Pending limit')}</label>
                   <input value={pendingLimit} onChange={(e) => setPendingLimit(e.target.value)} className="mt-1 w-full bg-surface-3 border border-white/5 rounded px-2 py-1.5 text-xs text-white/70 focus:outline-none" />
                 </div>
                 <div>
-                  <label className="text-[10px] text-white/35">Timeout age (min)</label>
+                  <label className="text-[10px] text-white/35">{tr('Возраст таймаута (мин)', 'Timeout age (min)')}</label>
                   <input value={timeoutMinAge} onChange={(e) => setTimeoutMinAge(e.target.value)} className="mt-1 w-full bg-surface-3 border border-white/5 rounded px-2 py-1.5 text-xs text-white/70 focus:outline-none" />
                 </div>
                 <div>
-                  <label className="text-[10px] text-white/35">Timeout batch limit</label>
+                  <label className="text-[10px] text-white/35">{tr('Лимит батча таймаута', 'Timeout batch limit')}</label>
                   <input value={timeoutLimit} onChange={(e) => setTimeoutLimit(e.target.value)} className="mt-1 w-full bg-surface-3 border border-white/5 rounded px-2 py-1.5 text-xs text-white/70 focus:outline-none" />
                 </div>
               </div>
               <div>
-                <label className="text-[10px] text-white/35">Resolve reason</label>
+                <label className="text-[10px] text-white/35">{tr('Причина резолва', 'Resolve reason')}</label>
                 <input value={resolveReason} onChange={(e) => setResolveReason(e.target.value)} className="mt-1 w-full bg-surface-3 border border-white/5 rounded px-2 py-1.5 text-xs text-white/70 focus:outline-none" />
               </div>
-              <button onClick={runPendingTimeout} disabled={billingBusy} className="w-full py-2 rounded-lg bg-red-600/80 hover:bg-red-500 text-[11px] font-medium text-white disabled:opacity-40">Run Pending Timeout</button>
+              <button onClick={runPendingTimeout} disabled={billingBusy} className="w-full py-2 rounded-lg bg-red-600/80 hover:bg-red-500 text-[11px] font-medium text-white disabled:opacity-40">{tr('Запустить timeout pending', 'Run Pending Timeout')}</button>
             </div>
 
             <div className="space-y-2">
               {pending.length === 0 && (
-                <div className="rounded-lg bg-surface-2 border border-white/5 p-3 text-xs text-white/35">No pending payments for current filter.</div>
+                <div className="rounded-lg bg-surface-2 border border-white/5 p-3 text-xs text-white/35">{tr('Нет pending-платежей для текущего фильтра.', 'No pending payments for current filter.')}</div>
               )}
               {pending.map((p) => (
                 <div key={p.id} className="rounded-lg bg-surface-2 border border-white/5 p-3 space-y-2">
@@ -346,8 +358,8 @@ export default function DevPanel({ t, userId }) {
                   </div>
                   <div className="text-[11px] text-white/45 break-all font-mono">{p.external_payment_id}</div>
                   <div className="flex gap-2">
-                    <button onClick={() => resolvePendingPayment(p.id, 'failed')} disabled={billingBusy} className="flex-1 py-1.5 rounded bg-red-600/80 hover:bg-red-500 text-[11px] text-white disabled:opacity-40">Mark Failed</button>
-                    <button onClick={() => resolvePendingPayment(p.id, 'succeeded')} disabled={billingBusy} className="flex-1 py-1.5 rounded bg-emerald-600/80 hover:bg-emerald-500 text-[11px] text-white disabled:opacity-40">Mark Succeeded</button>
+                    <button onClick={() => resolvePendingPayment(p.id, 'failed')} disabled={billingBusy} className="flex-1 py-1.5 rounded bg-red-600/80 hover:bg-red-500 text-[11px] text-white disabled:opacity-40">{tr('Пометить failed', 'Mark Failed')}</button>
+                    <button onClick={() => resolvePendingPayment(p.id, 'succeeded')} disabled={billingBusy} className="flex-1 py-1.5 rounded bg-emerald-600/80 hover:bg-emerald-500 text-[11px] text-white disabled:opacity-40">{tr('Пометить succeeded', 'Mark Succeeded')}</button>
                   </div>
                 </div>
               ))}
@@ -358,35 +370,35 @@ export default function DevPanel({ t, userId }) {
           <div className="px-4 py-5 animate-fade-in">
             <div className="text-center py-4 mb-4">
               <div className="w-16 h-16 mx-auto rounded-2xl bg-surface-3 flex items-center justify-center text-3xl mb-3">⬛</div>
-              <h3 className="text-lg font-semibold text-white/80">Web Terminal</h3>
-              <p className="text-sm text-white/30 mt-2 max-w-xs mx-auto">Execute commands, deploy, and manage your LLM Router directly from the app.</p>
+              <h3 className="text-lg font-semibold text-white/80">{tr('Веб-терминал', 'Web Terminal')}</h3>
+              <p className="text-sm text-white/30 mt-2 max-w-xs mx-auto">{tr('Выполняйте команды, деплой и управление LLM Router прямо из приложения.', 'Execute commands, deploy, and manage your LLM Router directly from the app.')}</p>
             </div>
             {/* Fake terminal preview */}
             <div className="rounded-xl bg-black/40 border border-white/5 p-4 font-mono text-xs space-y-1">
               <p className="text-emerald-400">$ llm status</p>
-              <p className="text-white/50">✓ Backend: running (uptime 13h)</p>
-              <p className="text-white/50">✓ Models: 15 available</p>
-              <p className="text-white/50">✓ Users: 3 unique</p>
+              <p className="text-white/50">{tr('✓ Backend: работает (аптайм 13ч)', '✓ Backend: running (uptime 13h)')}</p>
+              <p className="text-white/50">{tr('✓ Модели: 15 доступны', '✓ Models: 15 available')}</p>
+              <p className="text-white/50">{tr('✓ Пользователи: 3 уникальных', '✓ Users: 3 unique')}</p>
               <p className="text-emerald-400 mt-2">$ llm deploy</p>
-              <p className="text-white/50">Building frontend... ✓</p>
-              <p className="text-white/50">Restarting service... ✓</p>
-              <p className="text-white/50">Deploy complete.</p>
+              <p className="text-white/50">{tr('Сборка frontend... ✓', 'Building frontend... ✓')}</p>
+              <p className="text-white/50">{tr('Перезапуск сервиса... ✓', 'Restarting service... ✓')}</p>
+              <p className="text-white/50">{tr('Деплой завершен.', 'Deploy complete.')}</p>
               <p className="text-emerald-400 mt-2">$ _<span className="animate-pulse">▍</span></p>
             </div>
             {/* Planned commands */}
             <div className="space-y-2 mt-4">
               {[
-                '$ llm status — server health & stats',
-                '$ llm deploy — build & restart',
-                '$ llm logs — live server logs',
-                '$ llm git push — commit & push to GitHub',
-                '$ llm models — list available models',
-                '$ llm test <model> — quick model test',
-                '$ llm backup — create server backup',
+                tr('$ llm status — здоровье сервера и метрики', '$ llm status — server health & stats'),
+                tr('$ llm deploy — сборка и перезапуск', '$ llm deploy — build & restart'),
+                tr('$ llm logs — логи сервера в реальном времени', '$ llm logs — live server logs'),
+                tr('$ llm git push — коммит и push в GitHub', '$ llm git push — commit & push to GitHub'),
+                tr('$ llm models — список доступных моделей', '$ llm models — list available models'),
+                tr('$ llm test <model> — быстрый тест модели', '$ llm test <model> — quick model test'),
+                tr('$ llm backup — создать бэкап сервера', '$ llm backup — create server backup'),
               ].map((cmd, i) => (
                 <div key={i} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-surface-2 border border-dashed border-white/5">
                   <span className="text-[11px] font-mono text-cyan-400/40">{cmd}</span>
-                  <span className="ml-auto text-[9px] text-white/15 bg-white/5 px-2 py-0.5 rounded-full">Soon</span>
+                  <span className="ml-auto text-[9px] text-white/15 bg-white/5 px-2 py-0.5 rounded-full">{tr('Скоро', 'Soon')}</span>
                 </div>
               ))}
             </div>

@@ -1,5 +1,6 @@
 const t = {
   en: {
+    _lang: 'en',
     // Role selection
     chooseRole: 'Choose your role',
     chooseRoleDesc: 'Select how you want to use LLM Router',
@@ -81,14 +82,13 @@ const t = {
     contextLength: 'Context',
   },
   ru: {
+    _lang: 'ru',
     chooseRole: 'Выберите роль',
     chooseRoleDesc: 'Как вы хотите использовать LLM Router',
     roleAgent: 'ИИ Агенты',
     roleBusiness: 'Бизнес',
     roleBusinessDesc: 'Управление командой и бюджетом',
-    roleBusiness: 'Business',
-    roleBusinessDesc: 'Team management & budget control',
-    roleAgentDesc: 'Build & manage AI agents',
+    roleAgentDesc: 'Создание и управление ИИ агентами',
     roleDev: 'Разработчик',
     roleDevDesc: 'API ключи, SDK, вебхуки',
     roleUser: 'Пользователь',
