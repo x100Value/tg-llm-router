@@ -19,7 +19,6 @@ const personasRoutes = require('./routes/personas');
 const modesRoutes = require('./routes/modes');
 const billingRoutes = require('./routes/billing');
 const telegramWebhookRoutes = require('./routes/telegramWebhook');
-
 const llmRouter = require('./router/llmRouter');
 const userService = require('./services/userService');
 const billingService = require('./services/billingService');
@@ -151,7 +150,7 @@ app.get('/api/health', async (req, res) => {
   res.json({ status: 'ok', ...(await userService.stats()), uptime: process.uptime() });
 });
 
-app.get('/api/models', async (req, res) => {
+app.get('/api/models', validateTelegram, requireTelegramUserMatch, async (req, res) => {
   try {
     const userId = req.query.userId;
     const byok = userId ? await userService.getByokKeys(userId) : {};
@@ -168,7 +167,6 @@ app.post('/api/chat', validateTelegram, requireTelegramUserMatch, rateLimiter, a
   const requestId = getIdempotencyKey(req);
   const isPrivate = req.body.private === true;
   let reservation = null;
-
   try {
     if (!userId || !message) return res.status(400).json({ error: 'userId and message required' });
 
@@ -228,7 +226,6 @@ app.post('/api/chat/stream', validateTelegram, requireTelegramUserMatch, rateLim
   const requestId = getIdempotencyKey(req);
   const isPrivate = req.body.private === true;
   let reservation = null;
-
   try {
     if (!userId || !message) return res.status(400).json({ error: 'userId and message required' });
 

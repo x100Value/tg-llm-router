@@ -5,6 +5,7 @@ function getAuthenticatedTelegramId(req) {
 function getRequestedUserId(req) {
   if (req.body && req.body.userId != null) return String(req.body.userId);
   if (req.params && req.params.telegramId != null) return String(req.params.telegramId);
+  if (req.params && req.params.id != null) return String(req.params.id);
   if (req.query && req.query.userId != null) return String(req.query.userId);
   return null;
 }
