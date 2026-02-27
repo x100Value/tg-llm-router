@@ -300,6 +300,22 @@ export async function billingAdminMaintenanceRun(dryRun = true, adminToken) {
   return res.json();
 }
 
+export async function billingAdminStats(adminToken) {
+  const res = await fetch(`${BASE}/stats`, {
+    headers: billingAdminHeaders(adminToken, false),
+  });
+  if (!res.ok) throw new Error(await readError(res, 'Stats failed'));
+  return res.json();
+}
+
+export async function billingAdminHealth(adminToken) {
+  const res = await fetch(`${BASE}/health`, {
+    headers: billingAdminHeaders(adminToken, false),
+  });
+  if (!res.ok) throw new Error(await readError(res, 'Health failed'));
+  return res.json();
+}
+
 export const api = {
   models: fetchModels,
   chat: sendChat,
@@ -318,6 +334,8 @@ export const api = {
   billingAdminTimeoutRun,
   billingAdminResolvePayment,
   billingAdminMaintenanceRun,
+  billingAdminStats,
+  billingAdminHealth,
 };
 
 export async function vaultSave(telegramId, category, data) {
@@ -355,8 +373,9 @@ export async function vaultDelete(telegramId, category) {
 
 api.vault = { save: vaultSave, load: vaultLoad, list: vaultList, delete: vaultDelete };
 
-export async function health() {
-  const res = await fetch(`${BASE}/health`, { headers: authHeaders(false, false) });
+export async function health(adminToken = '') {
+  const headers = adminToken ? billingAdminHeaders(adminToken, false) : authHeaders(false, false);
+  const res = await fetch(`${BASE}/health`, { headers });
   if (!res.ok) throw new Error(await readError(res, 'Health failed'));
   return res.json();
 }
@@ -369,4 +388,6 @@ api.billingAdmin = {
   timeoutRun: billingAdminTimeoutRun,
   resolvePayment: billingAdminResolvePayment,
   maintenanceRun: billingAdminMaintenanceRun,
+  stats: billingAdminStats,
+  health: billingAdminHealth,
 };

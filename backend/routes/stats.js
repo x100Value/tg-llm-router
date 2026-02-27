@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { Pool } = require('pg');
+const requireAdminToken = require('../middleware/requireAdminToken');
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 // Track visit
@@ -20,7 +21,7 @@ router.post('/api/stats/visit', async (req, res) => {
 });
 
 // Get stats
-router.get('/api/stats', async (req, res) => {
+router.get('/api/stats', requireAdminToken, async (req, res) => {
   try {
     await pool.query(`CREATE TABLE IF NOT EXISTS visits (
       id SERIAL PRIMARY KEY,

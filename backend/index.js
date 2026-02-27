@@ -13,6 +13,7 @@ const { trimContextToLimit } = require('./middleware/tokenCap');
 const promptShield = require('./middleware/promptShield');
 const validateTelegram = require('./middleware/validateTelegram');
 const requireTelegramUserMatch = require('./middleware/requireTelegramUserMatch');
+const requireAdminToken = require('./middleware/requireAdminToken');
 
 const statsRoutes = require('./routes/stats');
 const personasRoutes = require('./routes/personas');
@@ -279,7 +280,7 @@ function startPendingPaymentTimeout() {
   );
 }
 
-app.get('/api/health', async (req, res) => {
+app.get('/api/health', requireAdminToken, async (req, res) => {
   res.json({ status: 'ok', ...(await userService.stats()), uptime: process.uptime() });
 });
 

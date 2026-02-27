@@ -37,6 +37,7 @@ export default function DevPanel({ t, userId }) {
   const [pgLoading, setPgLoading] = useState(false);
   const [stats, setStats] = useState(null);
   const [health, setHealth] = useState(null);
+  const [usageError, setUsageError] = useState('');
   const [adminToken, setAdminToken] = useState('');
   const [adminTokenDraft, setAdminTokenDraft] = useState('');
   const [billingBusy, setBillingBusy] = useState(false);
@@ -67,7 +68,19 @@ export default function DevPanel({ t, userId }) {
   const saveKey = async () => { if (!newKey.trim()) return; setSaving(true); await api.saveByokKey(userId, provider, newKey.trim()); setNewKey(''); setSaved(true); setTimeout(() => setSaved(false), 2000); await loadKeys(); setSaving(false); };
   const deleteKey = async (prov) => { await api.deleteByokKey(userId, prov); await loadKeys(); };
   const runPlayground = async () => { if (!pgInput.trim()) return; setPgLoading(true); setPgResult(null); const start = Date.now(); try { const res = await api.chat(userId, pgModel, pgInput.trim()); setPgResult({ ok: true, response: res.response, model: res.model, provider: res.provider, fallback: res.fallback, ms: Date.now() - start }); } catch (e) { setPgResult({ ok: false, error: e.message, ms: Date.now() - start }); } setPgLoading(false); };
-  const loadUsage = async () => { try { const [s, h] = await Promise.all([fetch('/api/stats').then(r=>r.json()), api.health()]); setStats(s); setHealth(h); } catch {} };
+  const loadUsage = async () => {
+    try {
+      setUsageError('');
+      const token = requireAdminToken();
+      const [s, h] = await Promise.all([api.billingAdmin.stats(token), api.billingAdmin.health(token)]);
+      setStats(s);
+      setHealth(h);
+    } catch (e) {
+      setStats(null);
+      setHealth(null);
+      setUsageError(String(e?.message || tr('Недостаточно прав для просмотра статистики', 'Not authorized to view usage')));
+    }
+  };
   useEffect(() => { if (tab === 'usage') loadUsage(); }, [tab]);
   const requireAdminToken = () => {
     const token = String(adminToken || '').trim();
@@ -242,6 +255,7 @@ export default function DevPanel({ t, userId }) {
         {tab === 'usage' && (
           <div className="px-4 py-5 space-y-4 animate-fade-in">
             <h3 className="text-sm font-semibold text-white/80">{tr('📊 Статистика', '📊 Usage')}</h3>
+            {usageError && <p className="text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{usageError}</p>}
             <div className="grid grid-cols-2 gap-2.5">
               <UCard icon="👤" label={tr('Уникальные пользователи', 'Unique users')} value={stats?.unique || 0} color="cyan" />
               <UCard icon="👁" label={tr('Всего визитов', 'Total visits')} value={stats?.total || 0} color="purple" />
