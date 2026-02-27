@@ -213,6 +213,23 @@ export async function billingCheckout(telegramId, planCode, provider = 'telegram
   return res.json();
 }
 
+export async function billingPaywallOpen(telegramId, payload = {}) {
+  const body = {
+    planCode: payload?.planCode || null,
+    source: payload?.source || 'user_panel',
+    metadata: payload?.metadata && typeof payload.metadata === 'object' ? payload.metadata : {},
+  };
+
+  const res = await fetch(`${BASE}/billing/paywall/${telegramId}/open`, {
+    method: 'POST',
+    headers: authHeaders(true, true),
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) throw new Error(await readError(res, 'Billing paywall tracking failed'));
+  return res.json();
+}
+
 export const api = {
   models: fetchModels,
   chat: sendChat,
@@ -225,6 +242,7 @@ export const api = {
   billingPlans,
   billingMe,
   billingCheckout,
+  billingPaywallOpen,
 };
 
 export async function vaultSave(telegramId, category, data) {
@@ -269,4 +287,4 @@ export async function health() {
 }
 
 api.health = health;
-api.billing = { plans: billingPlans, me: billingMe, checkout: billingCheckout };
+api.billing = { plans: billingPlans, me: billingMe, checkout: billingCheckout, paywallOpen: billingPaywallOpen };

@@ -91,6 +91,28 @@ router.get('/api/billing/me/:telegramId', validateTelegram, requireTelegramUserM
   }
 });
 
+router.post('/api/billing/paywall/:telegramId/open', validateTelegram, requireTelegramUserMatch, rateLimiter, async (req, res) => {
+  try {
+    const telegramId = req.params.telegramId;
+    const planCode = String(req.body?.planCode || '').trim();
+    const source = String(req.body?.source || 'app').trim().slice(0, 64);
+    const metadata = parseJsonSafe(req.body?.metadata);
+
+    await billingService.trackFunnelEvent({
+      event: 'paywall_open',
+      telegramId,
+      planCode: planCode || null,
+      provider: BILLING_DEFAULT_PROVIDER,
+      source,
+      metadata,
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/api/billing/subscription/:telegramId/status', validateTelegram, requireTelegramUserMatch, async (req, res) => {
   try {
     const telegramId = req.params.telegramId;
@@ -325,6 +347,16 @@ router.post('/api/billing/admin/subscription/maintenance/run', requireBillingAdm
       success: true,
       ...result,
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/billing/admin/analytics/funnel', requireBillingAdmin, rateLimiter, async (req, res) => {
+  try {
+    const hours = parseInt(req.query?.hours, 10);
+    const summary = await billingService.getFunnelSummary(hours);
+    res.json({ success: true, ...summary });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

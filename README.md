@@ -97,6 +97,13 @@ docker-compose up --build
 | POST | /api/user/:id/byok | Save BYOK key |
 | GET | /api/session/:id | Chat history |
 | DELETE | /api/session/:id | Clear history |
+| GET | /api/billing/plans | Billing plans |
+| GET | /api/billing/me/:telegramId | Billing profile + payments |
+| POST | /api/billing/paywall/:telegramId/open | Track paywall_open |
+| POST | /api/billing/checkout/:telegramId | Create checkout |
+| POST | /api/telegram/webhook | Telegram payment webhook |
+| POST | /api/billing/admin/subscription/maintenance/run | Manual maintenance |
+| GET | /api/billing/admin/analytics/funnel | Funnel analytics report |
 
 ## Stack
 - **Frontend:** React 18 + Vite + Tailwind CSS + Telegram WebApp SDK + TON Connect

@@ -31,6 +31,7 @@ export default function UserPanel({ t, userId }) {
   const [showPaywall, setShowPaywall] = useState(false);
   const [checkoutPlanCode, setCheckoutPlanCode] = useState('');
   const endRef = useRef(null);
+  const paywallTrackedRef = useRef(false);
 
   useEffect(() => {
     api.models(userId).then(m => { setModels(m); if (m.length && !model) setModel(m[0].id); });
@@ -82,6 +83,22 @@ export default function UserPanel({ t, userId }) {
     if (Number.isNaN(end.getTime())) return null;
     return end > new Date() ? subscription : null;
   }, [subscription]);
+
+  useEffect(() => {
+    if (!showPaywall) {
+      paywallTrackedRef.current = false;
+      return;
+    }
+    if (!userId || paywallTrackedRef.current) return;
+
+    paywallTrackedRef.current = true;
+    void api.billing.paywallOpen(userId, {
+      source: 'user_panel_paywall',
+      metadata: {
+        activeSubscription: Boolean(activeSubscription),
+      },
+    }).catch(() => {});
+  }, [showPaywall, userId, activeSubscription]);
 
   const send = async () => {
     if (!input.trim() || loading) return;

@@ -63,7 +63,13 @@ async function validatePreCheckout(preCheckout) {
     return { ok: false, reason: 'Invalid payment currency' };
   }
 
-  return { ok: true };
+  return {
+    ok: true,
+    telegramId: telegramIdFromPayload,
+    planCode,
+    provider: 'telegram_stars',
+    paymentExternalId: String(parsed?.externalPaymentId || '').trim(),
+  };
 }
 
 router.post('/api/telegram/webhook', async (req, res) => {
@@ -103,6 +109,19 @@ router.post('/api/telegram/webhook', async (req, res) => {
         });
       }
       await answerPreCheckout(preCheckout.id, true);
+      await billingService.trackFunnelEvent({
+        event: 'pre_checkout',
+        telegramId: validation.telegramId,
+        planCode: validation.planCode,
+        provider: validation.provider,
+        paymentExternalId: validation.paymentExternalId,
+        source: 'telegram_webhook',
+        metadata: {
+          approved: true,
+          currency: preCheckout.currency || null,
+          totalAmount: preCheckout.total_amount || null,
+        },
+      });
       preCheckoutApproved = true;
     }
 

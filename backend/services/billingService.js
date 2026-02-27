@@ -7,6 +7,7 @@ const BILLING_CURRENCY = process.env.BILLING_CURRENCY || 'XTR';
 const TELEGRAM_INVOICE_PREFIX = process.env.TELEGRAM_INVOICE_PREFIX || 'rtx';
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const SUBSCRIPTION_GRACE_DAYS = parseInt(process.env.SUBSCRIPTION_GRACE_DAYS || '3', 10);
+const BILLING_FUNNEL_EVENTS = ['paywall_open', 'checkout', 'pre_checkout', 'successful_payment'];
 
 const DEFAULT_PLANS = [
   {
@@ -87,6 +88,24 @@ class BillingService {
     await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_user_idem
       ON payments(telegram_id, idempotency_key)
       WHERE idempotency_key IS NOT NULL`);
+
+    await pool.query(`CREATE TABLE IF NOT EXISTS billing_funnel_events (
+      id BIGSERIAL PRIMARY KEY,
+      telegram_id TEXT NOT NULL,
+      event TEXT NOT NULL,
+      plan_code TEXT,
+      provider TEXT,
+      payment_external_id TEXT,
+      source TEXT,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_billing_funnel_created
+      ON billing_funnel_events(created_at DESC)`);
+
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_billing_funnel_event_created
+      ON billing_funnel_events(event, created_at DESC)`);
 
     await pool.query(`CREATE TABLE IF NOT EXISTS entitlements (
       id BIGSERIAL PRIMARY KEY,
@@ -309,6 +328,84 @@ class BillingService {
     return { subscription: activeSub, entitlements, payments };
   }
 
+  normalizeFunnelEventName(eventName) {
+    const name = String(eventName || '').trim().toLowerCase();
+    return BILLING_FUNNEL_EVENTS.includes(name) ? name : '';
+  }
+
+  async trackFunnelEvent(input = {}) {
+    const eventName = this.normalizeFunnelEventName(input?.event);
+    const telegramId = String(input?.telegramId || '').trim();
+    if (!eventName || !telegramId) return { ok: false, skipped: true };
+
+    const planCode = String(input?.planCode || '').trim().slice(0, 64) || null;
+    const provider = String(input?.provider || '').trim().slice(0, 64) || null;
+    const paymentExternalId = String(input?.paymentExternalId || '').trim().slice(0, 128) || null;
+    const source = String(input?.source || '').trim().slice(0, 64) || null;
+    const metadata = input?.metadata && typeof input.metadata === 'object' ? input.metadata : {};
+
+    await pool.query(
+      `INSERT INTO billing_funnel_events(
+        telegram_id, event, plan_code, provider, payment_external_id, source, metadata
+      ) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)`,
+      [
+        telegramId,
+        eventName,
+        planCode,
+        provider,
+        paymentExternalId,
+        source,
+        JSON.stringify(metadata),
+      ]
+    );
+
+    return { ok: true, skipped: false, event: eventName };
+  }
+
+  async getFunnelSummary(hours = 24) {
+    const parsedHours = parseInt(hours, 10);
+    const windowHours =
+      Number.isFinite(parsedHours) && parsedHours > 0
+        ? Math.min(parsedHours, 24 * 90)
+        : 24;
+
+    const { rows } = await pool.query(
+      `SELECT event, COUNT(*)::int AS total, COUNT(DISTINCT telegram_id)::int AS users
+       FROM billing_funnel_events
+       WHERE created_at >= NOW() - ($1 * INTERVAL '1 hour')
+       GROUP BY event`,
+      [windowHours]
+    );
+
+    const byEvent = new Map(rows.map((row) => [String(row.event), {
+      total: row.total || 0,
+      users: row.users || 0,
+    }]));
+
+    const counts = BILLING_FUNNEL_EVENTS.map((event) => ({
+      event,
+      total: byEvent.get(event)?.total || 0,
+      users: byEvent.get(event)?.users || 0,
+    }));
+
+    const paywallOpen = byEvent.get('paywall_open')?.total || 0;
+    const checkout = byEvent.get('checkout')?.total || 0;
+    const preCheckout = byEvent.get('pre_checkout')?.total || 0;
+    const successfulPayment = byEvent.get('successful_payment')?.total || 0;
+
+    return {
+      windowHours,
+      counts,
+      conversion: {
+        paywallToCheckoutPct: paywallOpen > 0 ? Number(((checkout / paywallOpen) * 100).toFixed(2)) : 0,
+        checkoutToPreCheckoutPct: checkout > 0 ? Number(((preCheckout / checkout) * 100).toFixed(2)) : 0,
+        preCheckoutToPaidPct: preCheckout > 0 ? Number(((successfulPayment / preCheckout) * 100).toFixed(2)) : 0,
+        checkoutToPaidPct: checkout > 0 ? Number(((successfulPayment / checkout) * 100).toFixed(2)) : 0,
+      },
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
   async getActiveSubscription(telegramId) {
     const { rows } = await pool.query(
       `SELECT id, telegram_id, plan_code, provider, status, current_period_end, cancel_at_period_end, metadata
@@ -398,7 +495,20 @@ class BillingService {
       ]
     );
 
-    return { payment: rows[0], reused: false, plan, providerPayload };
+    const payment = rows[0];
+    await this.trackFunnelEvent({
+      event: 'checkout',
+      telegramId,
+      planCode: plan.code,
+      provider: normalizedProvider,
+      paymentExternalId: payment.external_payment_id,
+      source: String(metadata?.source || 'checkout_api').slice(0, 64),
+      metadata: {
+        reused: false,
+      },
+    });
+
+    return { payment, reused: false, plan, providerPayload };
   }
 
   async processWebhook(event) {
@@ -463,6 +573,18 @@ class BillingService {
         metadata
       );
       await this.syncEntitlements(telegramId, plan, subscription.current_period_end);
+      await this.trackFunnelEvent({
+        event: 'successful_payment',
+        telegramId,
+        planCode,
+        provider,
+        paymentExternalId: externalPaymentId,
+        source: 'webhook',
+        metadata: {
+          status,
+          subscriptionApplied: true,
+        },
+      });
       return { ok: true, status, subscriptionApplied: true };
     }
 
