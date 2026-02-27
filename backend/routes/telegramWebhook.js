@@ -1,5 +1,6 @@
 const express = require('express');
 const billingService = require('../services/billingService');
+const alertService = require('../services/alertService');
 
 const router = express.Router();
 
@@ -70,6 +71,11 @@ router.post('/api/telegram/webhook', async (req, res) => {
     if (TELEGRAM_WEBHOOK_SECRET) {
       const token = String(req.headers['x-telegram-bot-api-secret-token'] || '');
       if (token !== TELEGRAM_WEBHOOK_SECRET) {
+        void alertService.notifyBillingWebhookError(
+          'telegram-webhook',
+          'INVALID_SECRET',
+          'x-telegram-bot-api-secret-token mismatch'
+        );
         return res.status(401).json({ error: 'Invalid Telegram webhook secret' });
       }
     }
@@ -82,6 +88,11 @@ router.post('/api/telegram/webhook', async (req, res) => {
     if (preCheckout?.id) {
       const validation = await validatePreCheckout(preCheckout);
       if (!validation.ok) {
+        void alertService.notifyBillingWebhookError(
+          'telegram-webhook',
+          'PRECHECKOUT_REJECTED',
+          validation.reason
+        );
         await answerPreCheckout(preCheckout.id, false, validation.reason);
         return res.json({
           ok: true,
@@ -111,6 +122,7 @@ router.post('/api/telegram/webhook', async (req, res) => {
     });
   } catch (err) {
     console.error('[TelegramWebhook]', err.message);
+    void alertService.notifyBillingWebhookError('telegram-webhook', 'UNHANDLED_ERROR', err.message);
     res.status(500).json({ error: err.message });
   }
 });

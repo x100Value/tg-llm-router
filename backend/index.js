@@ -22,15 +22,22 @@ const telegramWebhookRoutes = require('./routes/telegramWebhook');
 const llmRouter = require('./router/llmRouter');
 const userService = require('./services/userService');
 const billingService = require('./services/billingService');
+const alertService = require('./services/alertService');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 const MAX_HISTORY_MESSAGES = parseInt(process.env.MAX_HISTORY_MESSAGES || '10', 10);
 const SUBSCRIPTION_MAINTENANCE_ENABLED = (process.env.SUBSCRIPTION_MAINTENANCE_ENABLED || 'true').toLowerCase() !== 'false';
 const SUBSCRIPTION_MAINTENANCE_INTERVAL_SEC = parseInt(process.env.SUBSCRIPTION_MAINTENANCE_INTERVAL_SEC || '600', 10);
+const PENDING_PAYMENT_ALERT_ENABLED = (process.env.PENDING_PAYMENT_ALERT_ENABLED || 'true').toLowerCase() !== 'false';
+const PENDING_PAYMENT_ALERT_INTERVAL_SEC = parseInt(process.env.PENDING_PAYMENT_ALERT_INTERVAL_SEC || '300', 10);
+const PENDING_PAYMENT_ALERT_MIN_AGE_MIN = parseInt(process.env.PENDING_PAYMENT_ALERT_MIN_AGE_MIN || '15', 10);
+const PENDING_PAYMENT_ALERT_MIN_COUNT = parseInt(process.env.PENDING_PAYMENT_ALERT_MIN_COUNT || '1', 10);
 
 let subscriptionMaintenanceRunning = false;
 let subscriptionMaintenanceTimer = null;
+let pendingPaymentAlertRunning = false;
+let pendingPaymentAlertTimer = null;
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
@@ -144,6 +151,54 @@ function startSubscriptionMaintenance() {
   }
 
   console.log(`[BillingMaintenance] enabled interval=${intervalSec}s`);
+}
+
+async function runPendingPaymentAlertTick(trigger) {
+  if (!PENDING_PAYMENT_ALERT_ENABLED) return;
+  if (pendingPaymentAlertRunning) return;
+
+  pendingPaymentAlertRunning = true;
+  try {
+    const stats = await billingService.getPendingPaymentsStats(PENDING_PAYMENT_ALERT_MIN_AGE_MIN);
+    const minCount =
+      Number.isFinite(PENDING_PAYMENT_ALERT_MIN_COUNT) && PENDING_PAYMENT_ALERT_MIN_COUNT > 0
+        ? PENDING_PAYMENT_ALERT_MIN_COUNT
+        : 1;
+
+    if (stats.count >= minCount) {
+      await alertService.notifyPendingPaymentsStale(stats.count, stats.oldestMinutes, stats.minAgeMinutes);
+      console.log(
+        `[BillingPendingMonitor] trigger=${trigger || 'interval'} count=${stats.count} oldest=${stats.oldestMinutes}m threshold=${stats.minAgeMinutes}m`
+      );
+    }
+  } catch (err) {
+    console.error('[BillingPendingMonitor] failed:', err.message);
+  } finally {
+    pendingPaymentAlertRunning = false;
+  }
+}
+
+function startPendingPaymentMonitor() {
+  if (!PENDING_PAYMENT_ALERT_ENABLED) {
+    console.log('[BillingPendingMonitor] disabled');
+    return;
+  }
+
+  const intervalSec = Number.isFinite(PENDING_PAYMENT_ALERT_INTERVAL_SEC) && PENDING_PAYMENT_ALERT_INTERVAL_SEC > 0
+    ? PENDING_PAYMENT_ALERT_INTERVAL_SEC
+    : 300;
+
+  runPendingPaymentAlertTick('startup').catch(() => {});
+
+  pendingPaymentAlertTimer = setInterval(() => {
+    runPendingPaymentAlertTick('interval').catch(() => {});
+  }, intervalSec * 1000);
+
+  if (typeof pendingPaymentAlertTimer.unref === 'function') {
+    pendingPaymentAlertTimer.unref();
+  }
+
+  console.log(`[BillingPendingMonitor] enabled interval=${intervalSec}s age=${PENDING_PAYMENT_ALERT_MIN_AGE_MIN}m`);
 }
 
 app.get('/api/health', async (req, res) => {
@@ -356,6 +411,7 @@ app.get('*', (req, res) => {
   await userService.init();
   await billingService.init();
   startSubscriptionMaintenance();
+  startPendingPaymentMonitor();
   app.listen(PORT, () => {
     console.log(`\nTG-LLM on :${PORT} | DB: ${userService.fallback ? 'memory' : 'postgresql'}\n`);
   });

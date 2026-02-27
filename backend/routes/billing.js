@@ -1,6 +1,7 @@
 const express = require('express');
 const { Pool } = require('pg');
 const billingService = require('../services/billingService');
+const alertService = require('../services/alertService');
 const validateTelegram = require('../middleware/validateTelegram');
 const requireTelegramUserMatch = require('../middleware/requireTelegramUserMatch');
 const rateLimiter = require('../middleware/rateLimiter');
@@ -334,6 +335,11 @@ router.post('/api/billing/webhook', async (req, res) => {
     if (BILLING_WEBHOOK_SECRET) {
       const got = String(req.headers['x-billing-webhook-secret'] || '');
       if (got !== BILLING_WEBHOOK_SECRET) {
+        void alertService.notifyBillingWebhookError(
+          'billing-webhook',
+          'INVALID_SECRET',
+          'x-billing-webhook-secret mismatch'
+        );
         return res.status(401).json({ error: 'Invalid webhook secret' });
       }
     }
@@ -362,11 +368,14 @@ router.post('/api/billing/webhook', async (req, res) => {
     res.json(result);
   } catch (err) {
     if (err.code === 'INVALID_WEBHOOK_PAYLOAD') {
+      void alertService.notifyBillingWebhookError('billing-webhook', err.code, err.message);
       return res.status(400).json({ error: err.message, code: err.code });
     }
     if (err.code === 'PLAN_NOT_FOUND') {
+      void alertService.notifyBillingWebhookError('billing-webhook', err.code, err.message);
       return res.status(404).json({ error: err.message, code: err.code });
     }
+    void alertService.notifyBillingWebhookError('billing-webhook', 'UNHANDLED_ERROR', err.message);
     res.status(500).json({ error: err.message });
   }
 });

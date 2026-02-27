@@ -549,6 +549,30 @@ class BillingService {
     return Math.max(0, SUBSCRIPTION_GRACE_DAYS);
   }
 
+  async getPendingPaymentsStats(minAgeMinutes = 15) {
+    const ageMinutesRaw = parseInt(minAgeMinutes, 10);
+    const ageMinutes =
+      Number.isFinite(ageMinutesRaw) && ageMinutesRaw > 0
+        ? ageMinutesRaw
+        : 15;
+
+    const { rows } = await pool.query(
+      `SELECT
+         COUNT(*)::int AS count,
+         COALESCE(FLOOR(EXTRACT(EPOCH FROM (NOW() - MIN(created_at))) / 60)::int, 0) AS oldest_minutes
+       FROM payments
+       WHERE status='pending'
+         AND created_at <= NOW() - ($1 * INTERVAL '1 minute')`,
+      [ageMinutes]
+    );
+
+    return {
+      minAgeMinutes: ageMinutes,
+      count: rows[0]?.count || 0,
+      oldestMinutes: rows[0]?.oldest_minutes || 0,
+    };
+  }
+
   async runSubscriptionMaintenance(options = {}) {
     const dryRun = options?.dryRun === true;
     const reason = String(options?.reason || 'scheduler').slice(0, 64);

@@ -2,6 +2,8 @@ const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const ALERT_CHAT_ID = process.env.TELEGRAM_ALERT_CHAT_ID || '';
 const ALERT_COOLDOWN_SEC = parseInt(process.env.ALERT_COOLDOWN_SEC || '600', 10);
 const ALERT_PREFIX = process.env.ALERT_PREFIX || 'TG-LLM ALERT';
+const WEBHOOK_ALERT_COOLDOWN_SEC = parseInt(process.env.WEBHOOK_ALERT_COOLDOWN_SEC || '300', 10);
+const PENDING_PAYMENT_ALERT_COOLDOWN_SEC = parseInt(process.env.PENDING_PAYMENT_ALERT_COOLDOWN_SEC || '900', 10);
 
 class AlertService {
   constructor() {
@@ -80,6 +82,25 @@ class AlertService {
 
   async notifyGuardUnavailable(name) {
     return this.send(`guard-unavailable:${name}`, `Guard unavailable: ${name}`, 900);
+  }
+
+  async notifyBillingWebhookError(source, code, details) {
+    const src = String(source || 'billing').slice(0, 40);
+    const errCode = String(code || 'UNKNOWN').slice(0, 60);
+    const detailText = String(details || '').slice(0, 300);
+    const key = `billing-webhook-error:${src}:${errCode}`;
+    const msg = `Billing webhook error | source=${src} | code=${errCode} | details=${detailText}`;
+    return this.send(key, msg, WEBHOOK_ALERT_COOLDOWN_SEC);
+  }
+
+  async notifyPendingPaymentsStale(count, oldestMinutes, minAgeMinutes) {
+    const pendingCount = Number(count || 0);
+    if (!Number.isFinite(pendingCount) || pendingCount <= 0) return false;
+
+    const oldest = Math.max(0, Math.floor(Number(oldestMinutes || 0)));
+    const ageThreshold = Math.max(1, Math.floor(Number(minAgeMinutes || 1)));
+    const msg = `Stale pending payments detected | count=${pendingCount} | threshold=${ageThreshold}m | oldest=${oldest}m`;
+    return this.send('billing-pending-stale', msg, PENDING_PAYMENT_ALERT_COOLDOWN_SEC);
   }
 }
 
