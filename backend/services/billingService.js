@@ -6,6 +6,7 @@ const BILLING_DEFAULT_PROVIDER = process.env.BILLING_DEFAULT_PROVIDER || 'telegr
 const BILLING_CURRENCY = process.env.BILLING_CURRENCY || 'XTR';
 const TELEGRAM_INVOICE_PREFIX = process.env.TELEGRAM_INVOICE_PREFIX || 'rtx';
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
+const SUBSCRIPTION_GRACE_DAYS = parseInt(process.env.SUBSCRIPTION_GRACE_DAYS || '3', 10);
 
 const DEFAULT_PLANS = [
   {
@@ -541,6 +542,126 @@ class BillingService {
        DO UPDATE SET value=EXCLUDED.value, expires_at=EXCLUDED.expires_at, updated_at=NOW()`,
       [telegramId, JSON.stringify(plan.code), expiresAt]
     );
+  }
+
+  getSubscriptionGraceDays() {
+    if (!Number.isFinite(SUBSCRIPTION_GRACE_DAYS)) return 0;
+    return Math.max(0, SUBSCRIPTION_GRACE_DAYS);
+  }
+
+  async runSubscriptionMaintenance(options = {}) {
+    const dryRun = options?.dryRun === true;
+    const reason = String(options?.reason || 'scheduler').slice(0, 64);
+    const graceDays = this.getSubscriptionGraceDays();
+    const client = await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      const movedToGrace = await client.query(
+        `SELECT COUNT(*)::int AS c
+         FROM subscriptions
+         WHERE status='active'
+           AND current_period_end IS NOT NULL
+           AND current_period_end <= NOW()
+           AND current_period_end > NOW() - ($1 * INTERVAL '1 day')`,
+        [graceDays]
+      );
+
+      const finalized = await client.query(
+        `SELECT COUNT(*)::int AS c
+         FROM subscriptions
+         WHERE status IN ('active','grace')
+           AND current_period_end IS NOT NULL
+           AND current_period_end <= NOW() - ($1 * INTERVAL '1 day')`,
+        [graceDays]
+      );
+
+      const entitlementsRevoked = await client.query(
+        `SELECT COUNT(*)::int AS c
+         FROM entitlements e
+         WHERE e.source='plan'
+           AND NOT EXISTS (
+             SELECT 1
+             FROM subscriptions s
+             WHERE s.telegram_id=e.telegram_id
+               AND (
+                 (s.status='active' AND (s.current_period_end IS NULL OR s.current_period_end > NOW() - ($1 * INTERVAL '1 day')))
+                 OR
+                 (s.status='grace' AND s.current_period_end IS NOT NULL AND s.current_period_end > NOW() - ($1 * INTERVAL '1 day'))
+               )
+           )`,
+        [graceDays]
+      );
+
+      if (dryRun) {
+        await client.query('ROLLBACK');
+        return {
+          ok: true,
+          dryRun: true,
+          reason,
+          graceDays,
+          movedToGrace: movedToGrace.rows[0]?.c || 0,
+          finalized: finalized.rows[0]?.c || 0,
+          entitlementsRevoked: entitlementsRevoked.rows[0]?.c || 0,
+          ranAt: new Date().toISOString(),
+        };
+      }
+
+      const movedToGraceResult = await client.query(
+        `UPDATE subscriptions
+         SET status='grace', updated_at=NOW()
+         WHERE status='active'
+           AND current_period_end IS NOT NULL
+           AND current_period_end <= NOW()
+           AND current_period_end > NOW() - ($1 * INTERVAL '1 day')`,
+        [graceDays]
+      );
+
+      const finalizedResult = await client.query(
+        `UPDATE subscriptions
+         SET status=CASE WHEN cancel_at_period_end THEN 'canceled' ELSE 'expired' END,
+             updated_at=NOW()
+         WHERE status IN ('active','grace')
+           AND current_period_end IS NOT NULL
+           AND current_period_end <= NOW() - ($1 * INTERVAL '1 day')`,
+        [graceDays]
+      );
+
+      const entitlementsRevokedResult = await client.query(
+        `DELETE FROM entitlements e
+         WHERE e.source='plan'
+           AND NOT EXISTS (
+             SELECT 1
+             FROM subscriptions s
+             WHERE s.telegram_id=e.telegram_id
+               AND (
+                 (s.status='active' AND (s.current_period_end IS NULL OR s.current_period_end > NOW() - ($1 * INTERVAL '1 day')))
+                 OR
+                 (s.status='grace' AND s.current_period_end IS NOT NULL AND s.current_period_end > NOW() - ($1 * INTERVAL '1 day'))
+               )
+           )`,
+        [graceDays]
+      );
+
+      await client.query('COMMIT');
+
+      return {
+        ok: true,
+        dryRun: false,
+        reason,
+        graceDays,
+        movedToGrace: movedToGraceResult.rowCount,
+        finalized: finalizedResult.rowCount,
+        entitlementsRevoked: entitlementsRevokedResult.rowCount,
+        ranAt: new Date().toISOString(),
+      };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 }
 

@@ -27,6 +27,11 @@ const billingService = require('./services/billingService');
 const app = express();
 const PORT = process.env.PORT || 3001;
 const MAX_HISTORY_MESSAGES = parseInt(process.env.MAX_HISTORY_MESSAGES || '10', 10);
+const SUBSCRIPTION_MAINTENANCE_ENABLED = (process.env.SUBSCRIPTION_MAINTENANCE_ENABLED || 'true').toLowerCase() !== 'false';
+const SUBSCRIPTION_MAINTENANCE_INTERVAL_SEC = parseInt(process.env.SUBSCRIPTION_MAINTENANCE_INTERVAL_SEC || '600', 10);
+
+let subscriptionMaintenanceRunning = false;
+let subscriptionMaintenanceTimer = null;
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
@@ -98,6 +103,48 @@ async function rollbackQuotaSafe(userId, reservation, context) {
   } catch (rollbackErr) {
     console.error(`[${context}] rollback failed:`, rollbackErr.message);
   }
+}
+
+async function runSubscriptionMaintenanceTick(trigger) {
+  if (!SUBSCRIPTION_MAINTENANCE_ENABLED) return;
+  if (subscriptionMaintenanceRunning) return;
+
+  subscriptionMaintenanceRunning = true;
+  try {
+    const result = await billingService.runSubscriptionMaintenance({ reason: trigger || 'interval' });
+    if (result.movedToGrace || result.finalized || result.entitlementsRevoked) {
+      console.log(
+        `[BillingMaintenance] movedToGrace=${result.movedToGrace} finalized=${result.finalized} entitlementsRevoked=${result.entitlementsRevoked}`
+      );
+    }
+  } catch (err) {
+    console.error('[BillingMaintenance] failed:', err.message);
+  } finally {
+    subscriptionMaintenanceRunning = false;
+  }
+}
+
+function startSubscriptionMaintenance() {
+  if (!SUBSCRIPTION_MAINTENANCE_ENABLED) {
+    console.log('[BillingMaintenance] disabled');
+    return;
+  }
+
+  const intervalSec = Number.isFinite(SUBSCRIPTION_MAINTENANCE_INTERVAL_SEC) && SUBSCRIPTION_MAINTENANCE_INTERVAL_SEC > 0
+    ? SUBSCRIPTION_MAINTENANCE_INTERVAL_SEC
+    : 600;
+
+  runSubscriptionMaintenanceTick('startup').catch(() => {});
+
+  subscriptionMaintenanceTimer = setInterval(() => {
+    runSubscriptionMaintenanceTick('interval').catch(() => {});
+  }, intervalSec * 1000);
+
+  if (typeof subscriptionMaintenanceTimer.unref === 'function') {
+    subscriptionMaintenanceTimer.unref();
+  }
+
+  console.log(`[BillingMaintenance] enabled interval=${intervalSec}s`);
 }
 
 app.get('/api/health', async (req, res) => {
@@ -311,6 +358,7 @@ app.get('*', (req, res) => {
 (async () => {
   await userService.init();
   await billingService.init();
+  startSubscriptionMaintenance();
   app.listen(PORT, () => {
     console.log(`\nTG-LLM on :${PORT} | DB: ${userService.fallback ? 'memory' : 'postgresql'}\n`);
   });

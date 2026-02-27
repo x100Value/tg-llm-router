@@ -312,6 +312,23 @@ router.post('/api/billing/admin/subscription/deactivate', requireBillingAdmin, r
   }
 });
 
+router.post('/api/billing/admin/subscription/maintenance/run', requireBillingAdmin, rateLimiter, async (req, res) => {
+  try {
+    const dryRun = req.body?.dryRun === true || String(req.body?.dryRun || '').toLowerCase() === 'true';
+    const result = await billingService.runSubscriptionMaintenance({
+      dryRun,
+      reason: 'admin_manual',
+    });
+
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/api/billing/webhook', async (req, res) => {
   try {
     if (BILLING_WEBHOOK_SECRET) {
