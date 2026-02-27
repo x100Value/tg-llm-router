@@ -35,14 +35,15 @@ export default function UserPanel({ t, userId }) {
   const [checkoutPlanCode, setCheckoutPlanCode] = useState('');
   const endRef = useRef(null);
   const paywallTrackedRef = useRef(false);
+  const panelLang = isRu ? 'ru' : 'en';
 
   useEffect(() => {
     api.models(userId).then(m => { setModels(m); if (m.length && !model) setModel(m[0].id); });
-    fetch('/api/personas?lang=' + (window.Telegram?.WebApp?.initDataUnsafe?.user?.language_code || 'en'))
+    fetch('/api/personas?lang=' + panelLang)
       .then(r => r.json()).then(d => setPersonas(d.personas || [])).catch(() => {});
-    fetch('/api/modes?lang=' + (window.Telegram?.WebApp?.initDataUnsafe?.user?.language_code || 'en'))
+    fetch('/api/modes?lang=' + panelLang)
       .then(r => r.json()).then(d => setModes(d.modes || [])).catch(() => {});
-  }, [userId]);
+  }, [userId, panelLang]);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs, loading]);
 
