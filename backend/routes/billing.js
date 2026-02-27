@@ -1,13 +1,17 @@
 const express = require('express');
+const { Pool } = require('pg');
 const billingService = require('../services/billingService');
 const validateTelegram = require('../middleware/validateTelegram');
 const requireTelegramUserMatch = require('../middleware/requireTelegramUserMatch');
 const rateLimiter = require('../middleware/rateLimiter');
 
 const router = express.Router();
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const BILLING_WEBHOOK_SECRET = process.env.BILLING_WEBHOOK_SECRET || '';
 const BILLING_DEFAULT_PROVIDER = process.env.BILLING_DEFAULT_PROVIDER || 'telegram_stars';
+const BILLING_ADMIN_TOKEN = process.env.BILLING_ADMIN_TOKEN || '';
+const SUBSCRIPTION_GRACE_DAYS = parseInt(process.env.SUBSCRIPTION_GRACE_DAYS || '3', 10);
 
 function parseJsonSafe(value) {
   if (value == null) return {};
@@ -17,6 +21,55 @@ function parseJsonSafe(value) {
   } catch {
     return { raw: String(value) };
   }
+}
+
+function getAdminToken(req) {
+  const headerToken = String(req.headers['x-billing-admin-token'] || '').trim();
+  if (headerToken) return headerToken;
+
+  const authHeader = String(req.headers.authorization || '').trim();
+  if (authHeader.toLowerCase().startsWith('bearer ')) {
+    return authHeader.slice(7).trim();
+  }
+
+  return '';
+}
+
+function requireBillingAdmin(req, res, next) {
+  if (!BILLING_ADMIN_TOKEN) {
+    return res.status(503).json({ error: 'Billing admin token is not configured' });
+  }
+
+  const token = getAdminToken(req);
+  if (!token || token !== BILLING_ADMIN_TOKEN) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  next();
+}
+
+function computeGrace(subscription) {
+  const graceDays = Number.isFinite(SUBSCRIPTION_GRACE_DAYS)
+    ? Math.max(0, SUBSCRIPTION_GRACE_DAYS)
+    : 0;
+
+  if (!subscription?.current_period_end || graceDays <= 0) {
+    return { inGrace: false, graceEndsAt: null, graceDays };
+  }
+
+  const endAt = new Date(subscription.current_period_end);
+  if (!Number.isFinite(endAt.getTime())) {
+    return { inGrace: false, graceEndsAt: null, graceDays };
+  }
+
+  const graceEndsAt = new Date(endAt.getTime() + graceDays * 24 * 60 * 60 * 1000);
+  const now = Date.now();
+  const inGrace =
+    String(subscription.status) !== 'active' &&
+    endAt.getTime() <= now &&
+    graceEndsAt.getTime() > now;
+
+  return { inGrace, graceEndsAt: graceEndsAt.toISOString(), graceDays };
 }
 
 router.get('/api/billing/plans', async (req, res) => {
@@ -32,6 +85,94 @@ router.get('/api/billing/me/:telegramId', validateTelegram, requireTelegramUserM
   try {
     const data = await billingService.getBillingMe(req.params.telegramId);
     res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/billing/subscription/:telegramId/status', validateTelegram, requireTelegramUserMatch, async (req, res) => {
+  try {
+    const telegramId = req.params.telegramId;
+
+    const { rows } = await pool.query(
+      `SELECT id, telegram_id, plan_code, provider, status, current_period_end, cancel_at_period_end, metadata, updated_at
+       FROM subscriptions
+       WHERE telegram_id=$1
+       ORDER BY (status='active') DESC, current_period_end DESC NULLS LAST, updated_at DESC
+       LIMIT 1`,
+      [telegramId]
+    );
+
+    const subscription = rows[0] || null;
+    const grace = computeGrace(subscription);
+
+    res.json({
+      subscription,
+      inGrace: grace.inGrace,
+      graceEndsAt: grace.graceEndsAt,
+      graceDays: grace.graceDays,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/api/billing/subscription/:telegramId/cancel', validateTelegram, requireTelegramUserMatch, rateLimiter, async (req, res) => {
+  try {
+    const telegramId = req.params.telegramId;
+    const reason = String(req.body?.reason || 'user_requested').slice(0, 120);
+    const meta = {
+      cancelRequestedAt: new Date().toISOString(),
+      cancelReason: reason,
+    };
+
+    const { rows } = await pool.query(
+      `UPDATE subscriptions
+       SET cancel_at_period_end=TRUE,
+           metadata=COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+           updated_at=NOW()
+       WHERE telegram_id=$1
+         AND status='active'
+         AND (current_period_end IS NULL OR current_period_end > NOW())
+       RETURNING id, telegram_id, plan_code, provider, status, current_period_end, cancel_at_period_end, metadata`,
+      [telegramId, JSON.stringify(meta)]
+    );
+
+    if (!rows[0]) {
+      return res.status(404).json({ error: 'No active subscription to cancel' });
+    }
+
+    res.json({ success: true, subscription: rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/api/billing/subscription/:telegramId/resume', validateTelegram, requireTelegramUserMatch, rateLimiter, async (req, res) => {
+  try {
+    const telegramId = req.params.telegramId;
+    const meta = {
+      resumedAt: new Date().toISOString(),
+      resumeSource: 'user',
+    };
+
+    const { rows } = await pool.query(
+      `UPDATE subscriptions
+       SET cancel_at_period_end=FALSE,
+           metadata=COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+           updated_at=NOW()
+       WHERE telegram_id=$1
+         AND status='active'
+         AND (current_period_end IS NULL OR current_period_end > NOW())
+       RETURNING id, telegram_id, plan_code, provider, status, current_period_end, cancel_at_period_end, metadata`,
+      [telegramId, JSON.stringify(meta)]
+    );
+
+    if (!rows[0]) {
+      return res.status(404).json({ error: 'No active subscription to resume' });
+    }
+
+    res.json({ success: true, subscription: rows[0] });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -74,6 +215,99 @@ router.post('/api/billing/checkout/:telegramId', validateTelegram, requireTelegr
     if (err.code === 'PLAN_NOT_FOUND') {
       return res.status(404).json({ error: err.message, code: err.code });
     }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/api/billing/admin/subscription/activate', requireBillingAdmin, rateLimiter, async (req, res) => {
+  try {
+    const telegramId = String(req.body?.telegramId || '').trim();
+    const planCode = String(req.body?.planCode || '').trim();
+    const reason = String(req.body?.reason || 'admin_activate').slice(0, 120);
+    const intervalDaysRaw = parseInt(req.body?.intervalDays, 10);
+
+    if (!telegramId || !planCode) {
+      return res.status(400).json({ error: 'telegramId and planCode required' });
+    }
+
+    const plan = await billingService.getPlan(planCode);
+    if (!plan || !plan.active) {
+      return res.status(404).json({ error: 'Plan not found', code: 'PLAN_NOT_FOUND' });
+    }
+
+    const intervalDays =
+      Number.isFinite(intervalDaysRaw) && intervalDaysRaw > 0
+        ? intervalDaysRaw
+        : Number(plan.interval_days || 30);
+
+    const effectivePlan = { ...plan, interval_days: intervalDays };
+    const metadata = {
+      source: 'admin',
+      reason,
+      activatedAt: new Date().toISOString(),
+    };
+
+    const subscription = await billingService.activateSubscription(
+      telegramId,
+      effectivePlan,
+      'admin',
+      null,
+      metadata
+    );
+    await billingService.syncEntitlements(telegramId, effectivePlan, subscription.current_period_end);
+
+    res.json({
+      success: true,
+      subscription,
+      plan: {
+        code: effectivePlan.code,
+        interval_days: effectivePlan.interval_days,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/api/billing/admin/subscription/deactivate', requireBillingAdmin, rateLimiter, async (req, res) => {
+  try {
+    const telegramId = String(req.body?.telegramId || '').trim();
+    const reason = String(req.body?.reason || 'admin_deactivate').slice(0, 120);
+
+    if (!telegramId) {
+      return res.status(400).json({ error: 'telegramId required' });
+    }
+
+    const meta = {
+      deactivatedAt: new Date().toISOString(),
+      deactivatedReason: reason,
+      source: 'admin',
+    };
+
+    const updated = await pool.query(
+      `UPDATE subscriptions
+       SET status='canceled',
+           cancel_at_period_end=TRUE,
+           current_period_end=NOW(),
+           metadata=COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+           updated_at=NOW()
+       WHERE telegram_id=$1
+         AND status='active'`,
+      [telegramId, JSON.stringify(meta)]
+    );
+
+    await pool.query(
+      `DELETE FROM entitlements
+       WHERE telegram_id=$1
+         AND source='plan'`,
+      [telegramId]
+    );
+
+    res.json({
+      success: true,
+      deactivated: updated.rowCount,
+    });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });

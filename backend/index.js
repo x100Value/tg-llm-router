@@ -9,6 +9,7 @@ const rateLimiter = require('./middleware/rateLimiter');
 const antiSpam = require('./middleware/antiSpam');
 const globalBudgetGuard = require('./middleware/globalBudgetGuard');
 const tokenCap = require('./middleware/tokenCap');
+const { trimContextToLimit } = require('./middleware/tokenCap');
 const promptShield = require('./middleware/promptShield');
 const validateTelegram = require('./middleware/validateTelegram');
 const requireTelegramUserMatch = require('./middleware/requireTelegramUserMatch');
@@ -140,7 +141,8 @@ app.post('/api/chat', validateTelegram, requireTelegramUserMatch, rateLimiter, a
     if (!isPrivate) await userService.addMessage(userId, 'user', message);
 
     const session = await userService.getSession(userId);
-    const messages = session.slice(-MAX_HISTORY_MESSAGES).map((m) => ({ role: m.role, content: m.content }));
+    const rawMessages = session.slice(-MAX_HISTORY_MESSAGES).map((m) => ({ role: m.role, content: m.content }));
+    const messages = trimContextToLimit(rawMessages);
     const byok = await userService.getByokKeys(userId);
     const result = await llmRouter.chat(model, messages, byok);
 
@@ -209,7 +211,8 @@ app.post('/api/chat/stream', validateTelegram, requireTelegramUserMatch, rateLim
     if (!isPrivate) await userService.addMessage(userId, 'user', message);
 
     const session = await userService.getSession(userId);
-    const messages = session.slice(-MAX_HISTORY_MESSAGES).map((m) => ({ role: m.role, content: m.content }));
+    const rawMessages = session.slice(-MAX_HISTORY_MESSAGES).map((m) => ({ role: m.role, content: m.content }));
+    const messages = trimContextToLimit(rawMessages);
     const byok = await userService.getByokKeys(userId);
 
     res.writeHead(200, {
