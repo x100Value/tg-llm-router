@@ -12,6 +12,10 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const BILLING_WEBHOOK_SECRET = process.env.BILLING_WEBHOOK_SECRET || '';
 const BILLING_DEFAULT_PROVIDER = process.env.BILLING_DEFAULT_PROVIDER || 'telegram_stars';
 const BILLING_ADMIN_TOKEN = process.env.BILLING_ADMIN_TOKEN || '';
+const BILLING_ADMIN_IP_ALLOWLIST = String(process.env.BILLING_ADMIN_IP_ALLOWLIST || '')
+  .split(',')
+  .map((v) => v.trim())
+  .filter(Boolean);
 const SUBSCRIPTION_GRACE_DAYS = parseInt(process.env.SUBSCRIPTION_GRACE_DAYS || '3', 10);
 
 function parseJsonSafe(value) {
@@ -36,6 +40,33 @@ function getAdminToken(req) {
   return '';
 }
 
+function normalizeIp(raw) {
+  const ip = String(raw || '').trim();
+  if (!ip) return '';
+  if (ip.startsWith('::ffff:')) return ip.slice(7);
+  if (ip === '::1') return '127.0.0.1';
+  return ip;
+}
+
+function isLoopbackIp(ip) {
+  const normalized = normalizeIp(ip);
+  return normalized === '127.0.0.1';
+}
+
+function getClientIp(req) {
+  const remoteIp = normalizeIp(req.socket?.remoteAddress || req.ip || '');
+  if (!isLoopbackIp(remoteIp)) return remoteIp;
+
+  const fromRealIp = normalizeIp(req.headers['x-real-ip']);
+  if (fromRealIp) return fromRealIp;
+
+  const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0];
+  const fromForwarded = normalizeIp(fwd);
+  if (fromForwarded) return fromForwarded;
+
+  return remoteIp;
+}
+
 function requireBillingAdmin(req, res, next) {
   if (!BILLING_ADMIN_TOKEN) {
     return res.status(503).json({ error: 'Billing admin token is not configured' });
@@ -44,6 +75,14 @@ function requireBillingAdmin(req, res, next) {
   const token = getAdminToken(req);
   if (!token || token !== BILLING_ADMIN_TOKEN) {
     return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  if (BILLING_ADMIN_IP_ALLOWLIST.length > 0) {
+    const clientIp = getClientIp(req);
+    const allowed = BILLING_ADMIN_IP_ALLOWLIST.includes(clientIp);
+    if (!allowed) {
+      return res.status(403).json({ error: 'Forbidden by IP allowlist' });
+    }
   }
 
   next();

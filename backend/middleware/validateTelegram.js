@@ -2,7 +2,8 @@ const crypto = require('crypto');
 
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const INTERNAL_BYPASS_SECRET = process.env.INTERNAL_BYPASS_SECRET || '';
-const MAX_INIT_DATA_AGE_SEC = parseInt(process.env.TELEGRAM_INITDATA_MAX_AGE_SEC || '86400', 10);
+const MAX_INIT_DATA_AGE_SEC = parseInt(process.env.TELEGRAM_INITDATA_MAX_AGE_SEC || '900', 10);
+const INTERNAL_BYPASS_ENABLED = (process.env.INTERNAL_BYPASS_ENABLED || 'false').toLowerCase() === 'true';
 
 function getInternalUserId(req) {
   return String(
@@ -15,6 +16,8 @@ function getInternalUserId(req) {
 }
 
 function tryInternalBypass(req) {
+  if (!INTERNAL_BYPASS_ENABLED) return false;
+  if (String(process.env.NODE_ENV || '').toLowerCase() === 'production') return false;
   if (!INTERNAL_BYPASS_SECRET) return false;
 
   const providedSecret = String(req.headers['x-internal-auth'] || '').trim();

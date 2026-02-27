@@ -95,6 +95,14 @@ Telegram alert delivery requires:
 - `BOT_TOKEN`
 - `TELEGRAM_ALERT_CHAT_ID`
 
+## Security Baseline (Prod)
+- `INTERNAL_BYPASS_ENABLED=false`
+- `INTERNAL_BYPASS_SECRET=` (empty unless explicitly needed in non-prod)
+- `TELEGRAM_INITDATA_MAX_AGE_SEC=600-900`
+- `BILLING_WEBHOOK_SECRET` must be set
+- `BILLING_ADMIN_TOKEN` must be rotated periodically
+- `BILLING_ADMIN_IP_ALLOWLIST` should include only trusted admin source IPs
+
 ## Rollback
 Rollback code to previous commit:
 ```bash
