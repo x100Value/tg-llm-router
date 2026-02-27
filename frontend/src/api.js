@@ -71,6 +71,15 @@ function authHeaders(json = true, requireTelegram = false) {
   return headers;
 }
 
+function billingAdminHeaders(adminToken, json = true) {
+  const token = String(adminToken || '').trim();
+  if (!token) throw new Error('Billing admin token required');
+
+  const headers = { 'X-Billing-Admin-Token': token };
+  if (json) headers['Content-Type'] = 'application/json';
+  return headers;
+}
+
 function buildIdempotencyKey(prefix = 'req') {
   try {
     if (window.crypto?.randomUUID) {
@@ -230,6 +239,67 @@ export async function billingPaywallOpen(telegramId, payload = {}) {
   return res.json();
 }
 
+export async function billingAdminFunnel(hours = 24, adminToken) {
+  const h = Number.isFinite(Number(hours)) ? Math.max(1, Number(hours)) : 24;
+  const res = await fetch(`${BASE}/billing/admin/analytics/funnel?hours=${h}`, {
+    headers: billingAdminHeaders(adminToken, false),
+  });
+  if (!res.ok) throw new Error(await readError(res, 'Billing funnel request failed'));
+  return res.json();
+}
+
+export async function billingAdminPending(minAgeMinutes = 15, limit = 100, adminToken) {
+  const minAge = Number.isFinite(Number(minAgeMinutes)) ? Math.max(0, Number(minAgeMinutes)) : 15;
+  const lim = Number.isFinite(Number(limit)) ? Math.max(1, Number(limit)) : 100;
+  const res = await fetch(`${BASE}/billing/admin/payments/pending?minAgeMinutes=${minAge}&limit=${lim}`, {
+    headers: billingAdminHeaders(adminToken, false),
+  });
+  if (!res.ok) throw new Error(await readError(res, 'Pending payments request failed'));
+  return res.json();
+}
+
+export async function billingAdminTimeoutRun(payload = {}, adminToken) {
+  const body = {
+    minAgeMinutes: payload?.minAgeMinutes,
+    limit: payload?.limit,
+    reason: payload?.reason || 'dev_panel_timeout',
+  };
+  const res = await fetch(`${BASE}/billing/admin/payments/pending/timeout/run`, {
+    method: 'POST',
+    headers: billingAdminHeaders(adminToken, true),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await readError(res, 'Pending timeout run failed'));
+  return res.json();
+}
+
+export async function billingAdminResolvePayment(paymentId, action, reason, adminToken) {
+  const id = String(paymentId || '').trim();
+  if (!id) throw new Error('paymentId required');
+
+  const body = {
+    action: String(action || '').trim().toLowerCase(),
+    reason: String(reason || 'dev_panel_resolve').trim().slice(0, 160),
+  };
+  const res = await fetch(`${BASE}/billing/admin/payments/${encodeURIComponent(id)}/resolve`, {
+    method: 'POST',
+    headers: billingAdminHeaders(adminToken, true),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await readError(res, 'Pending resolve failed'));
+  return res.json();
+}
+
+export async function billingAdminMaintenanceRun(dryRun = true, adminToken) {
+  const res = await fetch(`${BASE}/billing/admin/subscription/maintenance/run`, {
+    method: 'POST',
+    headers: billingAdminHeaders(adminToken, true),
+    body: JSON.stringify({ dryRun: !!dryRun }),
+  });
+  if (!res.ok) throw new Error(await readError(res, 'Maintenance run failed'));
+  return res.json();
+}
+
 export const api = {
   models: fetchModels,
   chat: sendChat,
@@ -243,6 +313,11 @@ export const api = {
   billingMe,
   billingCheckout,
   billingPaywallOpen,
+  billingAdminFunnel,
+  billingAdminPending,
+  billingAdminTimeoutRun,
+  billingAdminResolvePayment,
+  billingAdminMaintenanceRun,
 };
 
 export async function vaultSave(telegramId, category, data) {
@@ -288,3 +363,10 @@ export async function health() {
 
 api.health = health;
 api.billing = { plans: billingPlans, me: billingMe, checkout: billingCheckout, paywallOpen: billingPaywallOpen };
+api.billingAdmin = {
+  funnel: billingAdminFunnel,
+  pending: billingAdminPending,
+  timeoutRun: billingAdminTimeoutRun,
+  resolvePayment: billingAdminResolvePayment,
+  maintenanceRun: billingAdminMaintenanceRun,
+};
